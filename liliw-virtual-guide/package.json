@@ -1,0 +1,62 @@
+{
+  "name": "liliw-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "prebuild": "node scripts/stamp-sw.mjs"
+  },
+  "dependencies": {
+    "@mapbox/mapbox-gl-draw": "^1.5.1",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.6.0",
+    "@supabase/supabase-js": "^2.105.1",
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tiptap/pm": "^3.31.3",
+    "@tiptap/react": "^3.31.3",
+    "@tiptap/starter-kit": "^3.31.3",
+    "algoliasearch": "^4.27.0",
+    "dompurify": "^3.4.15",
+    "dotenv": "^17.3.1",
+    "framer-motion": "^12.38.0",
+    "fuse.js": "^7.3.0",
+    "groq-sdk": "^1.1.2",
+    "instantsearch.js": "^4.93.0",
+    "jspdf": "^4.2.1",
+    "jsqr": "^1.4.0",
+    "lucide-react": "^1.8.0",
+    "mapbox-gl": "^3.20.0",
+    "next": "16.3.5",
+    "nodemailer": "^9.0.3",
+    "nsfwjs": "^4.3.0",
+    "qrcode": "^1.5.4",
+    "qrcode.react": "^4.2.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "react-map-gl": "^8.1.1",
+    "recharts": "^3.8.1",
+    "sonner": "^2.0.7",
+    "three": "^0.184.0",
+    "threejs-post-processing": "^1.0.2",
+    "xlsx-js-style": "^1.2.0",
+    "zustand": "^5.0.12"
+  },
+  "overrides": {
+    "postcss": "^8.5.10"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/nodemailer": "^8.0.1",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.10",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

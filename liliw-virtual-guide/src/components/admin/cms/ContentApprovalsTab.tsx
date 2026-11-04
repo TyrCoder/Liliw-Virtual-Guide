@@ -1,0 +1,562 @@
+'use client';
+
+import { useEffect, useState, useCallback } from 'react';
+import { Loader2, CheckCircle, AlertCircle, ClipboardList, Eye, X } from 'lucide-react';
+import StatusBadge from './StatusBadge';
+import SafeHtml from '@/components/SafeHtml';
+
+// Columns that are plumbing rather than content — hidden in the View panel.
+const HIDDEN_FIELDS = new Set([
+  'id', 'status', 'created_at', 'updated_at', 'created_by', 'reviewed_by',
+  'published_at', 'reject_remarks', 'slug', 'legacy_strapi_user_id', 'documentId',
+  // Photos get their own strip above the fields: as a field they rendered as
+  // "3 items", and the snapshots they diff against predate media being sent
+  // here at all, so every entry's pictures would be marked newly added.
+  'media',
+]);
+
+/** The entry's pictures, so a reviewer approves what they can actually see. */
+function MediaStrip({ items }: { items: { url: string; alt_text?: string }[] }) {
+  return (
+    <div>
+      <p className="text-[10px] font-bold uppercase tracking-widest mb-1.5 text-gray-400">
+        Photos ({items.length})
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {items.map((m, i) => (
+          <a key={`${m.url}-${i}`} href={m.url} target="_blank" rel="noopener noreferrer"
+            className="block w-20 h-20 rounded-lg overflow-hidden border border-gray-200 hover:border-blue-300 transition">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={m.url} alt={m.alt_text || ''} className="w-full h-full object-cover" />
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** cms_media rows as the detail route returns them, told apart from any other array field. */
+function mediaItems(v: unknown): { url: string; alt_text?: string }[] {
+  return Array.isArray(v) && v.every(m => m && typeof m === 'object' && typeof (m as { url?: unknown }).url === 'string')
+    ? (v as { url: string; alt_text?: string }[])
+    : [];
+}
+
+// Pull readable text out of Strapi-style rich-text blocks.
+function blocksText(v: unknown): string {
+  if (!Array.isArray(v)) return '';
+  return v
+    .flatMap((b: any) => (Array.isArray(b?.children) ? b.children.map((c: any) => c?.text ?? '') : []))
+    .join(' ')
+    .trim();
+}
+
+const humanize = (k: string) => k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+const isEmpty = (v: unknown) => v == null || v === '' || (Array.isArray(v) && v.length === 0);
+const sameVal = (a: unknown, b: unknown) =>
+  (isEmpty(a) && isEmpty(b)) || JSON.stringify(a) === JSON.stringify(b);
+
+// One field's value, rendered for reading: HTML as rich text, rich-text blocks
+// flattened, everything else as plain text.
+function FieldValue({ v }: { v: unknown }) {
+  if (typeof v === 'string') {
+    return /<[a-z][\s\S]*>/i.test(v)
+      ? <SafeHtml html={v} className="prose prose-sm max-w-none text-gray-700" />
+      : <p className="text-sm text-gray-700 whitespace-pre-wrap">{v}</p>;
+  }
+  if (Array.isArray(v)) {
+    const txt = blocksText(v);
+    return txt
+      ? <p className="text-sm text-gray-700 whitespace-pre-wrap">{txt}</p>
+      : <p className="text-xs text-gray-400">{v.length} item{v.length !== 1 ? 's' : ''}</p>;
+  }
+  if (typeof v === 'boolean' || typeof v === 'number') return <p className="text-sm text-gray-700">{String(v)}</p>;
+  return <p className="text-xs text-gray-400">—</p>;
+}
+
+interface PendingEntry {
+  id: string;
+  title: string;
+  content_type: string;
+  created_by: string;
+  created_at: string;
+  status: string;
+}
+
+const TYPE_LABELS: Record<string, string> = {
+  attractions:   'Attraction',
+  events:        'Event',
+  news:          'News',
+  'art-forms':   'Art Form',
+  artisans:      'Artisan',
+  stories:       'Story',
+  faqs:          'FAQ',
+  itineraries:   'Itinerary',
+  // Omitting a type here does not just hide a filter chip — it leaves entries
+  // of that type unapprovable, which is how FAQs went unpublishable.
+  'community-events': 'Community Event',
+};
+
+const TYPE_COLORS: Record<string, string> = {
+  attractions:   '#F59E0B',
+  events:        '#3B82F6',
+  news:          '#8B5CF6',
+  'art-forms':   '#EC4899',
+  artisans:      '#10B981',
+  stories:       '#F97316',
+  faqs:          '#6366F1',
+  itineraries:   '#84CC16',
+  'community-events': '#0D9488',
+};
+
+interface Props { token: string | null; }
+
+export default function ContentApprovalsTab({ token }: Props) {
+  const [entries, setEntries]     = useState<PendingEntry[]>([]);
+  const [loading, setLoading]     = useState(true);
+  const [rejectModal, setRejectModal] = useState<PendingEntry | null>(null);
+  const [remarks, setRemarks]     = useState('');
+  const [saving, setSaving]       = useState<string | null>(null);
+  const [msg, setMsg]             = useState<{ ok: boolean; text: string } | null>(null);
+  const [typeFilter, setTypeFilter] = useState('all');
+  // Batch selection.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchReject, setBatchReject] = useState(false);
+  // The entry being previewed in the View panel, and its load state.
+  const [viewEntry, setViewEntry] = useState<{
+    data: Record<string, unknown>; snapshot: Record<string, unknown> | null; title: string; type: string;
+  } | null>(null);
+  const [viewLoading, setViewLoading] = useState(false);
+  const [showAllFields, setShowAllFields] = useState(false);
+
+  const h: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setMsg(null);
+    const res = await fetch('/api/cms/pending', { headers: h }).catch(() => null);
+    const d = res ? await res.json().catch(() => ({})) : {};
+
+    // "No pending items" and "this screen could not read them" looked exactly
+    // the same here: a 403 for an editor, or an expired session, produced an
+    // empty list and a reassuring "All content is up to date."
+    if (!res) {
+      setMsg({ ok: false, text: 'Could not reach the server.' });
+    } else if (!res.ok) {
+      setMsg({
+        ok: false,
+        text: res.status === 403
+          ? 'Approvals are reviewed by officers and admins — your account cannot see this list.'
+          : d.error || `Could not load pending content (${res.status}).`,
+      });
+    } else if (d.warning) {
+      // The route reports content types it could not read rather than
+      // quietly leaving them out of the count.
+      setMsg({ ok: false, text: d.warning });
+    }
+
+    setEntries(d.data || []);
+    setLoading(false);
+  }, [token]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const approve = async (entry: PendingEntry) => {
+    setSaving(entry.id);
+    setMsg(null);
+    const res = await fetch(`/api/cms/${entry.content_type}/${entry.id}/approve`, {
+      method: 'POST', headers: h,
+    });
+    if (res.ok) {
+      setMsg({ ok: true, text: `"${entry.title}" approved and published.` });
+      setEntries(prev => prev.filter(e => e.id !== entry.id));
+    } else {
+      const d = await res.json();
+      setMsg({ ok: false, text: d.error || 'Failed to approve' });
+    }
+    setSaving(null);
+    setTimeout(() => setMsg(null), 4000);
+  };
+
+  // Fetch the full row so a reviewer can read the actual content before acting.
+  const openView = async (entry: PendingEntry) => {
+    setViewLoading(true); setViewEntry(null); setShowAllFields(false); setMsg(null);
+    const res = await fetch(`/api/cms/${entry.content_type}/${entry.id}`, { headers: h }).catch(() => null);
+    const d = res ? await res.json().catch(() => ({})) : {};
+    if (res && res.ok && d.data) {
+      setViewEntry({ data: d.data, snapshot: d.snapshot ?? null, title: entry.title, type: entry.content_type });
+    } else {
+      setMsg({ ok: false, text: d.error || 'Could not load the entry.' });
+    }
+    setViewLoading(false);
+  };
+
+  const openReject = (entry: PendingEntry) => {
+    setRejectModal(entry);
+    setRemarks('');
+    setMsg(null);
+  };
+
+  const toggleOne = (id: string) =>
+    setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleGroup = (items: PendingEntry[]) =>
+    setSelected(prev => {
+      const n = new Set(prev);
+      const allIn = items.every(i => n.has(i.id));
+      items.forEach(i => (allIn ? n.delete(i.id) : n.add(i.id)));
+      return n;
+    });
+
+  // Everything here is pending, so approve/reject always apply. The bulk
+  // endpoint is per content type, so a selection spanning types is sent as one
+  // request per type.
+  const runBulk = async (action: 'approve' | 'reject', reason?: string) => {
+    setBatchRunning(true); setMsg(null);
+    const byType = new Map<string, string[]>();
+    for (const e of entries) {
+      if (selected.has(e.id)) byType.set(e.content_type, [...(byType.get(e.content_type) ?? []), e.id]);
+    }
+    let done = 0, failed = 0;
+    for (const [type, ids] of byType) {
+      const res = await fetch(`/api/cms/${type}/bulk`, {
+        method: 'POST', headers: h, body: JSON.stringify({ action, ids, remarks: reason }),
+      }).catch(() => null);
+      if (res && res.ok) { const d = await res.json().catch(() => ({})); done += d.count ?? 0; }
+      else failed += ids.length;
+    }
+    setMsg({ ok: failed === 0, text: `${action === 'approve' ? 'Approved' : 'Rejected'} ${done}${failed ? ` · ${failed} failed` : ''}.` });
+    setSelected(new Set());
+    setBatchRunning(false);
+    load();
+    setTimeout(() => setMsg(null), 4000);
+  };
+
+  const confirmReject = async () => {
+    if (!remarks.trim()) return;
+    if (batchReject) {
+      await runBulk('reject', remarks.trim());
+      setBatchReject(false); setRemarks('');
+      return;
+    }
+    if (!rejectModal) return;
+    setSaving(rejectModal.id);
+    const res = await fetch(`/api/cms/${rejectModal.content_type}/${rejectModal.id}/reject`, {
+      method: 'POST', headers: h,
+      body: JSON.stringify({ remarks: remarks.trim() }),
+    });
+    if (res.ok) {
+      setMsg({ ok: true, text: `"${rejectModal.title}" rejected with remarks.` });
+      setEntries(prev => prev.filter(e => e.id !== rejectModal.id));
+      setRejectModal(null);
+    } else {
+      const d = await res.json();
+      setMsg({ ok: false, text: d.error || 'Failed to reject' });
+    }
+    setSaving(null);
+    setTimeout(() => setMsg(null), 4000);
+  };
+
+  const types = ['all', ...Object.keys(TYPE_LABELS)];
+  const filtered = typeFilter === 'all' ? entries : entries.filter(e => e.content_type === typeFilter);
+
+  // Group by content type
+  const grouped = filtered.reduce<Record<string, PendingEntry[]>>((acc, e) => {
+    if (!acc[e.content_type]) acc[e.content_type] = [];
+    acc[e.content_type].push(e);
+    return acc;
+  }, {});
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-base font-bold text-gray-900">Content Approvals</h2>
+          <p className="text-xs text-gray-400 mt-0.5">
+            {loading ? 'Loading…' : `${entries.length} item${entries.length !== 1 ? 's' : ''} waiting for review`}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {types.map(t => (
+            <button key={t} onClick={() => setTypeFilter(t)}
+              className={`px-3 py-1 rounded-lg text-xs font-semibold transition capitalize ${typeFilter === t ? 'text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+              style={typeFilter === t ? { backgroundColor: '#1565C0' } : {}}>
+              {t === 'all' ? 'All' : TYPE_LABELS[t]}
+              {t !== 'all' && (
+                <span className="ml-1 opacity-70">
+                  ({entries.filter(e => e.content_type === t).length})
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Batch action bar */}
+      {selected.size > 0 && (
+        <div className="flex items-center gap-3 flex-wrap px-4 py-3 rounded-xl border" style={{ backgroundColor: 'rgba(21,101,192,0.06)', borderColor: 'rgba(21,101,192,0.25)' }}>
+          <span className="text-sm font-bold" style={{ color: '#1565C0' }}>{selected.size} selected</span>
+          <div className="flex items-center gap-2 ml-auto">
+            <button onClick={() => runBulk('approve')} disabled={batchRunning}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-green-300 text-green-700 bg-white hover:bg-green-50 transition disabled:opacity-50">
+              {batchRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle className="w-3.5 h-3.5" />} Approve ({selected.size})
+            </button>
+            <button onClick={() => { setBatchReject(true); setRemarks(''); setMsg(null); }} disabled={batchRunning}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-red-300 text-red-600 bg-white hover:bg-red-50 transition disabled:opacity-50">
+              <AlertCircle className="w-3.5 h-3.5" /> Reject ({selected.size})
+            </button>
+            <button onClick={() => setSelected(new Set())}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-500 hover:bg-gray-100 transition">
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Global message */}
+      {msg && (
+        <div className={`flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-medium ${msg.ok ? 'bg-green-50 text-green-700 border border-green-100' : 'bg-red-50 text-red-600 border border-red-100'}`}>
+          {msg.ok ? <CheckCircle className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
+          {msg.text}
+        </div>
+      )}
+
+      {/* Content */}
+      {loading ? (
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="w-6 h-6 animate-spin" style={{ color: '#1565C0' }} />
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col items-center py-20 text-gray-400">
+          <ClipboardList className="w-12 h-12 mb-3 opacity-20" />
+          <p className="font-semibold text-sm">No pending items</p>
+          <p className="text-xs mt-1">All content is up to date.</p>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {Object.entries(grouped).map(([type, items]) => (
+            <div key={type} className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+              {/* Section header */}
+              <div className="flex items-center gap-3 px-6 py-3 border-b border-gray-100"
+                style={{ backgroundColor: `${TYPE_COLORS[type]}10` }}>
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: TYPE_COLORS[type] }} />
+                <h3 className="font-bold text-sm text-gray-800">{TYPE_LABELS[type]}</h3>
+                <span className="ml-auto text-xs font-semibold text-gray-400">{items.length} pending</span>
+              </div>
+
+              <table className="w-full text-sm">
+                <thead><tr className="bg-gray-50 text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                  <th className="pl-5 pr-2 py-3 w-8">
+                    <input type="checkbox" aria-label={`Select all ${TYPE_LABELS[type]}`}
+                      checked={items.every(i => selected.has(i.id))}
+                      onChange={() => toggleGroup(items)}
+                      className="w-4 h-4 rounded border-gray-300 cursor-pointer accent-blue-600" />
+                  </th>
+                  <th className="px-5 py-3 text-left">Title</th>
+                  <th className="px-5 py-3 text-left">Submitted by</th>
+                  <th className="px-5 py-3 text-left">Submitted</th>
+                  <th className="px-5 py-3 text-left">Status</th>
+                  <th className="px-5 py-3 text-left">Actions</th>
+                </tr></thead>
+                <tbody className="divide-y divide-gray-50">
+                  {items.map(entry => (
+                    <tr key={entry.id} className={`transition-colors ${selected.has(entry.id) ? 'bg-blue-50/60' : 'hover:bg-gray-50'}`}>
+                      <td className="pl-5 pr-2 py-4">
+                        <input type="checkbox" aria-label={`Select ${entry.title}`}
+                          checked={selected.has(entry.id)} onChange={() => toggleOne(entry.id)}
+                          className="w-4 h-4 rounded border-gray-300 cursor-pointer accent-blue-600" />
+                      </td>
+                      <td className="px-5 py-4 font-semibold text-gray-900">{entry.title}</td>
+                      <td className="px-5 py-4 text-gray-500 text-xs">{entry.created_by}</td>
+                      <td className="px-5 py-4 text-gray-400 text-xs">
+                        {new Date(entry.created_at).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </td>
+                      <td className="px-5 py-4"><StatusBadge status={entry.status} /></td>
+                      <td className="px-5 py-4">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => openView(entry)}
+                            disabled={viewLoading}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-blue-300 hover:text-blue-600 transition disabled:opacity-50">
+                            <Eye className="w-3 h-3" /> View
+                          </button>
+                          <button
+                            onClick={() => approve(entry)}
+                            disabled={saving === entry.id}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-green-200 text-green-700 hover:bg-green-50 transition disabled:opacity-50">
+                            {saving === entry.id
+                              ? <Loader2 className="w-3 h-3 animate-spin" />
+                              : <CheckCircle className="w-3 h-3" />}
+                            Approve
+                          </button>
+                          <button
+                            onClick={() => openReject(entry)}
+                            disabled={saving === entry.id}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-red-200 text-red-600 hover:bg-red-50 transition disabled:opacity-50">
+                            <AlertCircle className="w-3 h-3" /> Reject
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Reject modal */}
+      {(rejectModal || batchReject) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <h3 className="font-bold text-gray-900">{batchReject ? `Reject ${selected.size} Entries` : 'Reject Entry'}</h3>
+              <button onClick={() => { setRejectModal(null); setBatchReject(false); }} className="p-1 rounded-lg text-gray-400 hover:text-gray-600 transition">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <p className="text-sm text-gray-600">
+                {batchReject
+                  ? <>Rejecting <span className="font-semibold text-gray-900">{selected.size} selected entries</span> with the same remarks. Each author will see them and can revise and resubmit.</>
+                  : <>Rejecting <span className="font-semibold text-gray-900">&quot;{rejectModal?.title}&quot;</span>. The editor will see your remarks and can revise and resubmit.</>}
+              </p>
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">
+                  Remarks <span className="text-red-400">*</span>
+                </label>
+                <textarea
+                  rows={4}
+                  value={remarks}
+                  onChange={e => setRemarks(e.target.value)}
+                  placeholder="Explain what needs to be changed…"
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-300 resize-none"
+                />
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-end gap-2">
+              <button onClick={() => { setRejectModal(null); setBatchReject(false); }}
+                className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-500 hover:bg-gray-100 transition">
+                Cancel
+              </button>
+              <button
+                onClick={confirmReject}
+                disabled={!remarks.trim() || batchRunning || (!!rejectModal && saving === rejectModal.id)}
+                className="inline-flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-semibold text-white bg-red-500 hover:bg-red-600 transition disabled:opacity-60">
+                {(batchRunning || (!!rejectModal && saving === rejectModal.id)) ? <Loader2 className="w-4 h-4 animate-spin" /> : <AlertCircle className="w-4 h-4" />}
+                Reject
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* View panel — the full submitted content, so a reviewer sees what they
+          are approving. */}
+      {(viewLoading || viewEntry) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => { setViewEntry(null); setViewLoading(false); }}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col"
+            onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 shrink-0">
+              <div className="min-w-0">
+                <h3 className="font-bold text-gray-900 truncate">{viewEntry?.title ?? 'Loading…'}</h3>
+                {viewEntry && <p className="text-xs text-gray-400 mt-0.5">{TYPE_LABELS[viewEntry.type] ?? viewEntry.type}</p>}
+              </div>
+              <button onClick={() => { setViewEntry(null); setViewLoading(false); }}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600 transition shrink-0">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-6 py-5 overflow-y-auto space-y-5">
+              {viewLoading && (
+                <div className="flex items-center justify-center py-10">
+                  <Loader2 className="w-6 h-6 animate-spin" style={{ color: '#1565C0' }} />
+                </div>
+              )}
+              {viewEntry && (() => {
+                const { data, snapshot } = viewEntry;
+                const isNew = !snapshot;
+                const rows = Object.keys(data)
+                  .filter(k => !HIDDEN_FIELDS.has(k) && !isEmpty(data[k]))
+                  .map(k => {
+                    const cur = data[k];
+                    const old = snapshot?.[k];
+                    const state: 'new' | 'changed' | 'same' =
+                      isNew ? 'new'
+                      : isEmpty(old) && !isEmpty(cur) ? 'new'
+                      : !sameVal(cur, old) ? 'changed'
+                      : 'same';
+                    return { k, cur, old, state };
+                  });
+                const changed = rows.filter(r => r.state !== 'same');
+                const shown = (isNew || showAllFields || changed.length === 0) ? rows : changed;
+
+                const photos = mediaItems(data.media);
+
+                return (
+                  <>
+                    {photos.length > 0 && <MediaStrip items={photos} />}
+                    {isNew ? (
+                      <div className="text-xs font-semibold px-3 py-2 rounded-lg bg-green-50 text-green-700 border border-green-100">
+                        New submission — all content is new.
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-xs text-gray-500">
+                          {changed.length === 0
+                            ? 'No changes from the published version.'
+                            : `${changed.length} field${changed.length !== 1 ? 's' : ''} changed`}
+                        </span>
+                        {changed.length > 0 && (
+                          <button onClick={() => setShowAllFields(s => !s)}
+                            className="text-xs font-semibold text-blue-600 hover:underline shrink-0">
+                            {showAllFields ? 'Show only changes' : 'Show all fields'}
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {shown.map(({ k, cur, old, state }) => (
+                      <div key={k} className={
+                        state === 'changed' ? 'border-l-2 border-amber-300 pl-3'
+                        : state === 'new' && !isNew ? 'border-l-2 border-green-300 pl-3'
+                        : ''
+                      }>
+                        <p className="text-[10px] font-bold uppercase tracking-widest mb-1 flex items-center gap-2 text-gray-400">
+                          {humanize(k)}
+                          {state === 'new' && !isNew && <span className="text-green-600">Added</span>}
+                          {state === 'changed' && <span className="text-amber-600">Changed</span>}
+                        </p>
+                        {state === 'changed' ? (
+                          <div className="space-y-1.5">
+                            <div className="rounded-lg bg-red-50 px-3 py-2">
+                              <p className="text-[9px] font-bold text-red-400 uppercase tracking-widest mb-0.5">Was</p>
+                              <FieldValue v={old} />
+                            </div>
+                            <div className="rounded-lg bg-green-50 px-3 py-2">
+                              <p className="text-[9px] font-bold text-green-500 uppercase tracking-widest mb-0.5">Now</p>
+                              <FieldValue v={cur} />
+                            </div>
+                          </div>
+                        ) : (
+                          <FieldValue v={cur} />
+                        )}
+                      </div>
+                    ))}
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

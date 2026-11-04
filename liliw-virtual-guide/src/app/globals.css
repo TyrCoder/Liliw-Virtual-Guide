@@ -1,0 +1,320 @@
+@import "tailwindcss";
+@import "mapbox-gl/dist/mapbox-gl.css";
+
+:root {
+  --liliw-blue: #1565C0;
+  --deep-navy: #0B3D91;
+  --fiesta-gold: #F5C518;
+  --laguna-green: #2E7D32;
+  --warm-white: #F9F6F0;
+  --ink: #1A1A2E;
+  --background: #F9F6F0;
+  --foreground: #1A1A2E;
+
+  /* Tsinelas Festival palette. Royal blue carries meaning — active state,
+     primary actions, the wordmark. The other four are decorative only: they
+     appear in the woven border and the edge ribbons, never behind text, which
+     is what keeps the festival identity from tipping into looking childish. */
+  --royal-blue:       #0F5FB5;
+  --festival-yellow:  #F7C948;
+  --festival-orange:  #F7941D;
+  --festival-magenta: #D43D8D;
+  --festival-cyan:    #2EC4D6;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-body);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+/*
+ * The cream heritage ground.
+ *
+ * One image on the body, behind every page. `cover` with a centred position
+ * so the church stays left and the tsinelas right and neither is squashed —
+ * the artwork is 3:2 and a browser window rarely is, so something has to be
+ * cropped, and cropping is the instruction rather than stretching.
+ *
+ * Fixed attachment on pointer-fine screens keeps it still while content
+ * scrolls, which is what makes it read as a ground rather than a long tiled
+ * sheet. iOS Safari renders fixed attachment badly — it repaints the whole
+ * layer per scroll frame — so touch devices scroll it normally.
+ *
+ * The cream underneath is not decoration: it is what shows while the image
+ * loads, and what shows on the parts of a tall page the image does not reach.
+ */
+body {
+  background-color: #FBF7EE;
+  /* A cream veil over the artwork, not a lower opacity on it: a background
+     image cannot be faded directly, and wrapping the whole site in a
+     semi-transparent layer would fade the content with it. Two stops of the same
+     cream at 86% leave the church and the slippers reading at roughly a tenth
+     of their painted strength — present, never competing with a card. */
+  background-image:
+    linear-gradient(rgba(251, 247, 238, 0.86), rgba(251, 247, 238, 0.86)),
+    url('/images/liliw-cream.webp');
+  background-size: cover;
+  background-position: center top;
+  background-repeat: no-repeat;
+  color: var(--ink);
+  font-family: var(--font-body), 'Plus Jakarta Sans', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* A long unbroken string — an email address, a pasted URL in a submitted
+     story — otherwise widens its container past a 360px screen and takes the
+     whole page sideways with it. */
+  overflow-wrap: break-word;
+}
+
+/* Media may never be wider than what holds it. A single oversized image from
+   the CMS is the usual cause of a page that scrolls sideways on a phone, and
+   it is not something a page author can be relied on to catch every time.
+   svg is deliberately excluded: icons carry their own width and capping them
+   squashes them inside narrow flex rows. */
+img,
+video,
+iframe,
+canvas {
+  max-width: 100%;
+}
+
+@media (pointer: fine) {
+  body {
+    background-attachment: fixed;
+  }
+}
+
+/*
+ * Pages used to paint their own white or cream over the whole viewport, which
+ * covered the ground completely. `page-ground` marks a page root that should
+ * let it through. Cards, panels and modals keep their own solid surfaces —
+ * this is only for the sheet the page is drawn on.
+ */
+.page-ground {
+  background-color: transparent !important;
+}
+
+/*
+ * ── Page width ──────────────────────────────
+ *
+ * Every page picked its own container — 4xl through 7xl — so the same site
+ * was 896px wide on one page and 1280px on the next, and on a normal desktop
+ * a 6xl page left roughly 380px of empty ground down each side. Two widths
+ * now, named for what they hold rather than for a number.
+ *
+ * `page-wrap` is for grids and dashboards, where more columns is simply more
+ * of what the visitor came for.
+ *
+ * `read-wrap` is for pages that are mostly sentences. It is deliberately
+ * narrower: a line of text that runs the full width of a wide monitor is hard
+ * to read back to the start of, so those pages stay near a comfortable
+ * measure even though the space exists.
+ */
+.page-wrap {
+  width: 100%;
+  max-width: 1440px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.read-wrap {
+  width: 100%;
+  max-width: 1100px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ── Font utilities ─────────────────────────── */
+.font-display {
+  font-family: var(--font-display), 'Cormorant Garamond', Georgia, serif;
+}
+.font-heading {
+  font-family: var(--font-heading), 'Outfit', system-ui, sans-serif;
+}
+
+/* ── Section label chip ─────────────────────── */
+.section-label {
+  font-family: var(--font-heading), 'Outfit', system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* ── Gold underline decoration ──────────────── */
+.gold-underline::after {
+  content: '';
+  display: block;
+  width: 40px;
+  height: 3px;
+  background: var(--fiesta-gold);
+  margin-top: 10px;
+  border-radius: 2px;
+}
+
+/* ── Navbar: woven border, tread mark, hover underline ──────────────────────
+   The strip under the navbar stands in for the tread of a Liliw slipper sole
+   and the diagonal over-under of banig weaving. Done as a repeating gradient
+   rather than an SVG: no extra request, no asset to keep in sync, and it tiles
+   at any width. Kept to 3px so it reads as a hairline of colour, not a stripe. */
+.liliw-weave {
+  background-image: repeating-linear-gradient(
+    115deg,
+    var(--royal-blue)       0px,  var(--royal-blue)       9px,
+    var(--festival-cyan)    9px,  var(--festival-cyan)    15px,
+    var(--festival-yellow)  15px, var(--festival-yellow)  21px,
+    var(--festival-orange)  21px, var(--festival-orange)  27px,
+    var(--festival-magenta) 27px, var(--festival-magenta) 33px
+  );
+}
+
+/* Hover underline that grows from the centre out. Pure CSS rather than a
+   Framer layoutId, because every link animates independently on its own hover
+   and a shared layout element would slide between them instead. */
+.nav-underline { position: relative; }
+.nav-underline::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 5px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--royal-blue), var(--festival-cyan));
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform 280ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.nav-underline:hover::after { transform: scaleX(1); }
+/* The active page already has a filled pill; an underline on top is noise. */
+.nav-underline[data-active='true']::after { content: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-underline::after { transition: none; }
+}
+
+/* ── Scrollbar hide ─────────────────────────── */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Mapbox customizations ──────────────────── */
+.mapboxgl-popup-content {
+  background: transparent !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+  border-radius: 12px !important;
+}
+.mapboxgl-popup-tip {
+  display: none !important;
+}
+.mapboxgl-popup {
+  z-index: 10 !important;
+}
+.mapboxgl-ctrl-group {
+  background: rgba(11, 61, 145, 0.92) !important;
+  border: 1px solid rgba(245, 197, 24, 0.35) !important;
+}
+.mapboxgl-ctrl-group button {
+  filter: invert(1);
+}
+
+/* ── Hero full-viewport height with mobile fallbacks ── */
+/*
+ * The hero holds nothing but absolutely-positioned layers, so its height comes
+ * entirely from here — and under 640px this said `height: auto; min-height: 0`,
+ * which gave it no height at all. The section collapsed to nothing and the
+ * video simply was not on the page for anyone on a phone.
+ *
+ * The ratio does the work instead. The footage is 1920x1080, so a 16/9 box
+ * fills edge to edge with nothing cropped, at every width — and the titling is
+ * burnt into the video, so a crop would cut the words off.
+ *
+ * max-height keeps a tall window from pushing the rest of the page below the
+ * fold; when it bites, the box is wider than 16/9 and object-cover trims a
+ * little off the top and bottom rather than off the sides where the titling is.
+ */
+.hero-full {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: calc(var(--vh, 1vh) * 100 - 56px);
+}
+
+/* ── Editorial card hover ───────────────────── */
+.editorial-card {
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+.editorial-card:hover {
+  transform: translateY(-4px);
+}
+.editorial-card:hover .card-img {
+  transform: scale(1.05);
+}
+.card-img {
+  transition: transform 500ms ease;
+}
+
+/* ── Dog mascot animation ────────────────────── */
+@keyframes dogIdle {
+  0%, 100% { transform: translateY(0) rotate(-2deg); }
+  50%       { transform: translateY(-10px) rotate(2deg); }
+}
+.dog-idle {
+  animation: dogIdle 3.2s ease-in-out infinite;
+  will-change: transform;
+  cursor: pointer;
+}
+
+@keyframes dogJump {
+  0%   { transform: translateY(0)     rotate(0deg)   scale(1); }
+  30%  { transform: translateY(-28px) rotate(-8deg)  scale(1.05); }
+  55%  { transform: translateY(-34px) rotate(6deg)   scale(1.08); }
+  75%  { transform: translateY(-10px) rotate(-3deg)  scale(1.02); }
+  100% { transform: translateY(0)     rotate(0deg)   scale(1); }
+}
+.dog-jump {
+  animation: dogJump 0.7s cubic-bezier(.34,1.56,.64,1) both;
+  cursor: pointer;
+}
+
+@keyframes tailWag {
+  0%, 100% { transform: rotate(-10deg); }
+  50%       { transform: rotate(16deg); }
+}
+
+/* QR scanner sweep — the beam that travels down the reticle and back, so the
+   viewfinder reads as actively looking rather than decorated.
+ *
+ * The element is the full height of the reticle and carries a gradient that is
+ * transparent at the top and bright at its bottom edge; that edge is the beam,
+ * and the fade above it is its trail. Sliding the whole thing from fully above
+ * the frame to flush with it walks the beam from top to bottom.
+ *
+ * It is sized this way because a percentage translate resolves against the
+ * element's own height, not its container's. A short bar translated 100% moved
+ * only its own height — about a quarter of the way down the frame — which is
+ * what the first version did. */
+@keyframes qrSweep {
+  0%   { transform: translateY(-100%); }
+  50%  { transform: translateY(0); }
+  100% { transform: translateY(-100%); }
+}
+.qr-sweep {
+  animation: qrSweep 2.6s ease-in-out infinite;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* A continuously travelling line is exactly what this preference is for.
+     Held still at the top of the reticle, which still frames the code. */
+  .qr-sweep { animation: none; }
+}

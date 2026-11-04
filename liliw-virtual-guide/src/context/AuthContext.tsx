@@ -1,0 +1,212 @@
+'use client';
+
+import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
+import { safeLocal } from '@/lib/safeStorage';
+
+export interface StrapiUser {
+  id: string;
+  username: string;
+  email: string;
+  role?: { id: number; name: string; type: string };
+  adminPanelRole?: string;
+}
+
+interface AuthState {
+  user: StrapiUser | null;
+  token: string | null;
+  loading: boolean;
+}
+
+interface AuthCtx extends AuthState {
+  /** Resolves to the path this account should land on, or null to stay put. */
+  login: (identifier: string, password: string) => Promise<string | null>;
+  register: (username: string, email: string, password: string) => Promise<void>;
+  loginWithJwt: (jwt: string, user: StrapiUser) => void;
+  logout: () => void;
+  isAdmin: boolean;
+  isChatoOfficer: boolean;
+  isChatoEditor: boolean;
+  isStaff: boolean;
+  isLocal: boolean;
+  userRole: string;
+  adminPanelRole: string | null;
+}
+
+const AuthContext = createContext<AuthCtx | null>(null);
+
+const TOKEN_KEY     = 'liliw-jwt';
+const USER_KEY      = 'liliw-user';
+const ADMIN_EMAILS  = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || '').split(',').map(e => e.trim()).filter(Boolean);
+
+// Compute the normalized role value to store in the liliw-session cookie.
+// Must match the STAFF_ROLES array in middleware.ts exactly.
+function staffCookieRole(user: StrapiUser): string {
+  const roleType = user.role?.type ?? 'authenticated';
+  const roleName = (user.role?.name ?? '').toLowerCase();
+  const norm     = (s: string) => s.toLowerCase().replace(/[\s_-]/g, '');
+  const hasChatoRole = norm(roleName).includes('chato');
+
+  if (norm(roleType) === 'admin' || norm(roleName) === 'admin' ||
+      (user.email && ADMIN_EMAILS.includes(user.email) && !hasChatoRole)) {
+    return 'admin';
+  }
+  if (norm(roleType).includes('chatoofficer') || norm(roleName).includes('chatoofficer')) return 'chatoofficer';
+  if (norm(roleType).includes('chatoeditor')  || norm(roleName).includes('chatoeditor'))  return 'chatoeditor';
+  return roleType;
+}
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [state, setState] = useState<AuthState>({ user: null, token: null, loading: true });
+  const router = useRouter();
+
+  // On mount: always re-fetch the user's current role from Strapi so role
+  // changes (e.g. Admin → CHATO Officer) are reflected without re-logging in.
+  useEffect(() => {
+    const token = safeLocal.get(TOKEN_KEY);
+    if (!token) {
+      setState(s => ({ ...s, loading: false }));
+      return;
+    }
+    fetch('/api/auth/me', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => (r.ok ? r.json() : null))
+      .then(user => {
+        if (user?.id) {
+          safeLocal.set(USER_KEY, JSON.stringify(user));
+          // Refresh the session cookie on every page load so it never silently expires
+          setSessionCookie(staffCookieRole(user));
+          setState({ user, token, loading: false });
+        } else {
+          // Token expired or invalid — clear session
+          safeLocal.remove(TOKEN_KEY);
+          safeLocal.remove(USER_KEY);
+          clearSessionCookie();
+          setState({ user: null, token: null, loading: false });
+        }
+      })
+      .catch(() => {
+        // Network error — fall back to cached data so offline still works
+        const raw = safeLocal.get(USER_KEY);
+        try {
+          const user = raw ? JSON.parse(raw) : null;
+          if (user) setSessionCookie(staffCookieRole(user));
+          setState({ user, token, loading: false });
+        } catch {
+          setState({ user: null, token: null, loading: false });
+        }
+      });
+  }, []);
+
+  const setSessionCookie = (role: string) => {
+    document.cookie = `liliw-session=${role}; path=/; SameSite=Lax; max-age=604800`;
+  };
+
+  const clearSessionCookie = () => {
+    document.cookie = 'liliw-session=; path=/; SameSite=Lax; max-age=0';
+  };
+
+  const persist = (token: string, user: StrapiUser) => {
+    safeLocal.set(TOKEN_KEY, token);
+    safeLocal.set(USER_KEY, JSON.stringify(user));
+    setSessionCookie(staffCookieRole(user));
+    setState({ user, token, loading: false });
+  };
+
+  /**
+   * Returns where this account should land — '/admin' for staff, '/lbo' for an
+   * approved business owner, null for a visitor, who stays on the page they
+   * were reading. The server decides it; see the login route for why.
+   */
+  const login = useCallback(async (identifier: string, password: string): Promise<string | null> => {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error?.message || 'Login failed');
+    persist(data.jwt, data.user as StrapiUser);
+    toast.success(`Welcome back, ${(data.user as StrapiUser).username}!`);
+    return typeof data.landing === 'string' ? data.landing : null;
+  }, []);
+
+  const register = useCallback(async (username: string, email: string, password: string) => {
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error?.message || 'Registration failed');
+    persist(data.jwt, data.user as StrapiUser);
+    toast.success(`Welcome to Liliw, ${(data.user as StrapiUser).username}!`);
+  }, []);
+
+  const loginWithJwt = useCallback((jwt: string, user: StrapiUser) => {
+    persist(jwt, user);
+    toast.success(`Welcome to Liliw, ${user.username}!`);
+  }, []);
+
+  const logout = useCallback(() => {
+    safeLocal.remove(TOKEN_KEY);
+    safeLocal.remove(USER_KEY);
+    clearSessionCookie();
+
+    // The signed cookie is HttpOnly, so only the server can remove it. Without
+    // this the browser kept being admitted to /admin, /cms and /lbo after
+    // signing out, for the seven days the cookie had left.
+    fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+
+    setState({ user: null, token: null, loading: false });
+    toast('You\'ve been signed out.');
+
+    // Home, rather than wherever they happened to be. Staff signing out of a
+    // dashboard were left staring at a page they no longer had the session to
+    // load, and business owners at a dashboard with nothing in it.
+    router.push('/');
+  }, [router]);
+
+  const userRole       = state.user?.role?.type ?? 'public';
+  // Normalize: lowercase + strip spaces/hyphens/underscores for flexible matching
+  const roleName       = state.user?.role?.name?.toLowerCase() ?? '';
+  const roleNorm       = roleName.replace(/[\s_-]/g, '');
+  const roleType       = userRole.replace(/[\s_-]/g, '');
+  const adminPanelRole = state.user?.adminPanelRole ?? null;
+
+  const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || '').split(',').map(e => e.trim()).filter(Boolean);
+
+  const hasChatoRole = roleNorm.includes('chato');
+  const isAdmin = !!state.user && (
+    userRole === 'admin' ||
+    roleName === 'admin' ||
+    (!!state.user.email && adminEmails.includes(state.user.email) && !hasChatoRole)
+  );
+
+  const isChatoOfficer = !isAdmin && !!state.user && (
+    roleNorm.includes('chatoofficer') || roleType.includes('chatoofficer')
+  );
+
+  const isChatoEditor = !isAdmin && !isChatoOfficer && !!state.user && (
+    roleNorm.includes('chatoeditor') || roleType.includes('chatoeditor')
+  );
+
+  const isStaff = isAdmin || isChatoOfficer || isChatoEditor;
+  const isLocal = !!state.user && !isStaff && userRole === 'authenticated';
+
+  return (
+    <AuthContext.Provider value={{
+      ...state, login, register, loginWithJwt, logout,
+      isAdmin, isChatoOfficer, isChatoEditor, isStaff, isLocal,
+      userRole, adminPanelRole,
+    }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used inside AuthProvider');
+  return ctx;
+}

@@ -1,0 +1,922 @@
+'use client';
+
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { motion } from 'framer-motion';
+import { ChevronLeft, User, Lock, Mail, Check, Loader2, Upload, Building2 } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
+import Avatar from '@/components/Avatar';
+import { DEFAULT_AVATARS, spriteStyle, isCustomAvatar } from '@/lib/avatars';
+
+const HL = 'var(--font-heading), Outfit, sans-serif';
+const BL = 'var(--font-body), "Plus Jakarta Sans", sans-serif';
+
+type Tab = 'profile' | 'password' | 'email' | 'business';
+
+// Must stay in sync with the whitelist in /api/auth/update-profile.
+const USER_TYPE_OPTIONS = [
+  { value: 'liliw_local',   label: 'Liliw Resident' },
+  { value: 'laguna',        label: 'From Laguna Province' },
+  { value: 'provincial',    label: 'From Another Province' },
+  { value: 'international', label: 'International Tourist' },
+];
+
+const inputCls =
+  'w-full px-4 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 bg-white';
+
+function Banner({ type, msg }: { type: 'success' | 'error'; msg: string }) {
+  return (
+    <div
+      className={`px-4 py-3 rounded-xl text-sm font-medium mb-4 ${
+        type === 'success'
+          ? 'bg-green-50 text-green-700 border border-green-200'
+          : 'bg-red-50 text-red-700 border border-red-200'
+      }`}
+      style={{ fontFamily: BL }}
+    >
+      {msg}
+    </div>
+  );
+}
+
+function Label({ children }: { children: React.ReactNode }) {
+  return (
+    <label
+      className="block text-xs font-bold mb-1.5"
+      style={{ color: '#0B3D91', fontFamily: BL }}
+    >
+      {children}
+    </label>
+  );
+}
+
+function SubmitBtn({
+  loading,
+  children,
+}: {
+  loading?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="submit"
+      disabled={loading}
+      className="w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-60 transition"
+      style={{ backgroundColor: '#0B3D91', color: '#F5C518', fontFamily: BL }}
+    >
+      {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+      {children}
+    </button>
+  );
+}
+
+function SendOtpButton({
+  onSend,
+  label = 'Send Verification Code',
+}: {
+  onSend: () => Promise<void>;
+  label?: string;
+}) {
+  const [sending, setSending] = useState(false);
+  const [countdown, setCountdown] = useState(0);
+
+  const handleSend = async () => {
+    setSending(true);
+    try {
+      await onSend();
+      setCountdown(60);
+      const iv = setInterval(() => {
+        setCountdown(c => {
+          if (c <= 1) { clearInterval(iv); return 0; }
+          return c - 1;
+        });
+      }, 1000);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  if (countdown > 0) {
+    return (
+      <p className="text-xs text-gray-400 mt-1" style={{ fontFamily: BL }}>
+        Resend in {countdown}s
+      </p>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleSend}
+      disabled={sending}
+      className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold border border-blue-200 text-blue-700 hover:bg-blue-50 transition disabled:opacity-60"
+      style={{ fontFamily: BL }}
+    >
+      {sending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+      {label}
+    </button>
+  );
+}
+
+// ─── Profile Info Tab ──────────────────────────────────────────────────────────
+
+function ProfileTab({ token, email, username }: { token: string; email: string; username: string }) {
+  const [fullName, setFullName] = useState('');
+  const [uname, setUname] = useState(username);
+  const [userType, setUserType] = useState('');
+  const [gender, setGender] = useState('');
+  const [avatar, setAvatar] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState('');
+  const [error, setError] = useState('');
+
+  // Upload state is separate from the form's, because a picture is saved the
+  // moment it is chosen rather than waiting for Save Changes.
+  const [uploading, setUploading] = useState(false);
+  const [avatarNote, setAvatarNote] = useState('');
+  const [avatarError, setAvatarError] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!token) return;
+    fetch('/api/user/profile', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d?.full_name) setFullName(d.full_name);
+        if (d?.user_type) setUserType(d.user_type);
+        if (d?.gender) setGender(d.gender);
+        if (d?.avatar) setAvatar(d.avatar);
+      })
+      .catch(() => {});
+  }, [token]);
+
+  const pickDefault = async (id: string) => {
+    setAvatar(id);
+    setAvatarError(''); setAvatarNote('');
+    try {
+      const res = await fetch('/api/auth/update-profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ avatar: id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAvatarError(data.error ?? 'Could not save that picture.');
+        setAvatar(prev => prev === id ? null : prev);   // undo the optimistic pick
+        return;
+      }
+      // Trust the row the server read back, not the value we sent.
+      setAvatar(data.profile?.avatar ?? id);
+      setAvatarNote('Profile picture updated.');
+      window.dispatchEvent(new Event('liliw-avatar-updated'));
+    } catch {
+      setAvatarError('Could not reach the server.');
+    }
+  };
+
+  const uploadCustom = async (file: File) => {
+    setAvatarError(''); setAvatarNote('');
+    setUploading(true);
+    try {
+      // Screened here, before the bytes leave the device — see lib/avatar-screen.
+      setAvatarNote('Checking the image…');
+      const { screenAvatar } = await import('@/lib/avatar-screen');
+      const verdict = await screenAvatar(file);
+      if (!verdict.ok) { setAvatarNote(''); setAvatarError(verdict.reason); return; }
+
+      setAvatarNote('Uploading…');
+      const body = new FormData();
+      body.append('file', file);
+      const res = await fetch('/api/user/avatar', {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` }, body,
+      });
+      const data = await res.json();
+      if (!res.ok) { setAvatarNote(''); setAvatarError(data.error ?? 'Upload failed.'); return; }
+      setAvatar(data.url);
+      setAvatarNote('Profile picture updated.');
+      window.dispatchEvent(new Event('liliw-avatar-updated'));
+    } catch {
+      setAvatarNote('');
+      setAvatarError('Something went wrong while uploading.');
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const removeAvatar = async () => {
+    setAvatarError(''); setAvatarNote('');
+    try {
+      await fetch('/api/user/avatar', { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+      setAvatar(null);
+      setAvatarNote('Back to your initial.');
+      window.dispatchEvent(new Event('liliw-avatar-updated'));
+    } catch {
+      setAvatarError('Could not remove the picture.');
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSuccess(''); setError('');
+    setLoading(true);
+    try {
+      const res = await fetch('/api/auth/update-profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ username: uname, full_name: fullName, user_type: userType, gender }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error ?? 'Update failed.'); return; }
+
+      // Show what was stored. If the server trimmed or rejected something, the
+      // form should say so rather than keep displaying the attempt.
+      if (data.profile) {
+        setFullName(data.profile.full_name ?? '');
+        setUserType(data.profile.user_type ?? '');
+        setGender(data.profile.gender ?? '');
+      }
+      setSuccess(
+        username !== uname
+          ? 'Saved. Your new username appears everywhere once you sign in again.'
+          : 'Profile updated successfully!',
+      );
+    } catch {
+      setError('Something went wrong. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      {success && <Banner type="success" msg={success} />}
+      {error   && <Banner type="error"   msg={error}   />}
+
+      {/* ── Profile picture ── */}
+      <div>
+        <Label>Profile Picture</Label>
+        <div className="rounded-xl border border-gray-200 p-4 bg-white">
+          <div className="flex items-center gap-4 mb-4">
+            <Avatar avatar={avatar} name={fullName || uname} size={64} />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-gray-800" style={{ fontFamily: BL }}>
+                {isCustomAvatar(avatar) ? 'Your own photo'
+                  : avatar ? 'Liliw avatar'
+                  : 'Using your initial'}
+              </p>
+              <p className="text-xs text-gray-400 mt-0.5" style={{ fontFamily: BL }}>
+                Pick one below, or upload your own.
+              </p>
+            </div>
+            {avatar && (
+              <button type="button" onClick={removeAvatar}
+                className="ml-auto shrink-0 text-xs font-semibold text-gray-400 hover:text-red-500 transition">
+                Remove
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-6 gap-2">
+            {DEFAULT_AVATARS.map(a => {
+              const on = avatar === a.id;
+              return (
+                <button key={a.id} type="button" onClick={() => pickDefault(a.id)}
+                  title={a.label} aria-label={a.label} aria-pressed={on}
+                  className="relative rounded-full transition hover:scale-[1.06]"
+                  style={{
+                    aspectRatio: '1 / 1',
+                    ...spriteStyle(a.id),
+                    backgroundColor: '#EAF1FA',
+                    boxShadow: on ? '0 0 0 3px #0F5FB5' : '0 0 0 1px rgba(15,23,42,0.1)',
+                  }}>
+                  {on && (
+                    <span className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full flex items-center justify-center"
+                      style={{ backgroundColor: '#0F5FB5' }}>
+                      <Check className="w-2.5 h-2.5 text-white" strokeWidth={3.5} />
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) uploadCustom(f); }} />
+
+          <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading}
+            className="mt-3 w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold border border-dashed transition hover:bg-blue-50 disabled:opacity-60"
+            style={{ borderColor: '#93C5FD', color: '#0F5FB5', fontFamily: BL }}>
+            {uploading
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> Working…</>
+              : <><Upload className="w-4 h-4" /> Upload your own photo</>}
+          </button>
+
+          <p className="text-[11px] text-gray-400 mt-2 leading-relaxed" style={{ fontFamily: BL }}>
+            JPEG, PNG or WebP, up to 2 MB. Uploads are checked on your device before they are sent,
+            and staff can remove anything unsuitable.
+          </p>
+
+          {avatarNote  && <p className="text-xs text-blue-600 font-medium mt-2">{avatarNote}</p>}
+          {avatarError && <p className="text-xs text-red-500 font-medium mt-2">{avatarError}</p>}
+        </div>
+      </div>
+
+      <div>
+        <Label>Email Address</Label>
+        <input
+          type="text"
+          value={email}
+          readOnly
+          className={`${inputCls} bg-gray-50 text-gray-400 cursor-not-allowed`}
+        />
+        <p className="text-xs text-gray-400 mt-1" style={{ fontFamily: BL }}>
+          To change your email, use the "Change Email" tab.
+        </p>
+      </div>
+
+      <div>
+        <Label>Username</Label>
+        <input
+          type="text"
+          value={uname}
+          onChange={e => setUname(e.target.value)}
+          className={inputCls}
+          placeholder="Your username"
+        />
+      </div>
+
+      <div>
+        <Label>Full Name</Label>
+        <input
+          type="text"
+          value={fullName}
+          onChange={e => setFullName(e.target.value)}
+          className={inputCls}
+          placeholder="Your full name"
+        />
+      </div>
+
+      <div>
+        <Label>Where You're Visiting From</Label>
+        <select
+          value={userType}
+          onChange={e => setUserType(e.target.value)}
+          className={inputCls}
+        >
+          <option value="">Prefer not to say</option>
+          {USER_TYPE_OPTIONS.map(o => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+        <p className="text-xs text-gray-400 mt-1" style={{ fontFamily: BL }}>
+          Shown on your travel passport and helps the Tourism Office understand who visits Liliw.
+        </p>
+      </div>
+
+      {/* Optional, and blank is a real answer. The monthly figures a business
+          reports split visitors by gender, and this is the only place that is
+          known — but a count of two with one unstated is more honest than a
+          guess, so nothing here is required. */}
+      <div>
+        <Label>Gender</Label>
+        <select
+          value={gender}
+          onChange={e => setGender(e.target.value)}
+          className={inputCls}
+        >
+          <option value="">Prefer not to say</option>
+          <option value="male">Male</option>
+          <option value="female">Female</option>
+        </select>
+        <p className="text-xs text-gray-400 mt-1" style={{ fontFamily: BL }}>
+          Optional. Used only in the Tourism Office&rsquo;s visitor statistics, never shown on your profile.
+        </p>
+      </div>
+
+      <SubmitBtn loading={loading}>Save Changes</SubmitBtn>
+    </form>
+  );
+}
+
+// ─── Change Password Tab ───────────────────────────────────────────────────────
+
+function PasswordTab({ token, email }: { token: string; email: string }) {
+  const [codeSent, setCodeSent] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState('');
+  const [error, setError] = useState('');
+
+  const sendCode = useCallback(async () => {
+    setError('');
+    const res = await fetch('/api/auth/send-profile-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ purpose: 'password' }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? 'Failed to send code.');
+    setCodeSent(true);
+  }, [token]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSuccess(''); setError('');
+    setLoading(true);
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ otp, newPassword, confirmPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error ?? 'Password change failed.'); return; }
+      setSuccess('Password changed successfully!');
+      setOtp(''); setNewPassword(''); setConfirmPassword('');
+      setCodeSent(false);
+    } catch {
+      setError('Something went wrong. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      {success && <Banner type="success" msg={success} />}
+      {error   && <Banner type="error"   msg={error}   />}
+
+      <div className="p-4 rounded-xl bg-blue-50 border border-blue-100">
+        <p className="text-xs text-gray-500 mb-1" style={{ fontFamily: BL }}>
+          A verification code will be sent to:
+        </p>
+        <p className="text-sm font-semibold" style={{ color: '#0B3D91', fontFamily: BL }}>
+          {email}
+        </p>
+        <div className="mt-3">
+          <SendOtpButton onSend={sendCode} />
+        </div>
+      </div>
+
+      {codeSent && (
+        <>
+          <div>
+            <Label>Verification Code</Label>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              value={otp}
+              onChange={e => setOtp(e.target.value.replace(/\D/g, ''))}
+              className={inputCls}
+              placeholder="6-digit code"
+            />
+            <p className="text-xs text-gray-400 mt-1" style={{ fontFamily: BL }}>
+              Enter the code sent to {email}
+            </p>
+          </div>
+
+          <div>
+            <Label>New Password</Label>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={e => setNewPassword(e.target.value)}
+              className={inputCls}
+              placeholder="Min. 8, with a number and a symbol"
+            />
+          </div>
+
+          <div>
+            <Label>Confirm Password</Label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={e => setConfirmPassword(e.target.value)}
+              className={inputCls}
+              placeholder="Repeat new password"
+            />
+          </div>
+
+          <SubmitBtn loading={loading}>Verify &amp; Change Password</SubmitBtn>
+        </>
+      )}
+    </form>
+  );
+}
+
+// ─── Change Email Tab ──────────────────────────────────────────────────────────
+
+function EmailTab({ token, email, logout }: { token: string; email: string; logout: () => void }) {
+  const [phase1Sent, setPhase1Sent] = useState(false);
+  const [phase1Done, setPhase1Done] = useState(false);
+  const [otp1, setOtp1] = useState('');
+  const [verifying1, setVerifying1] = useState(false);
+
+  const [newEmail, setNewEmail] = useState('');
+  const [phase2Sent, setPhase2Sent] = useState(false);
+  const [otp2, setOtp2] = useState('');
+  const [verifying2, setVerifying2] = useState(false);
+
+  const [success, setSuccess] = useState('');
+  const [error, setError] = useState('');
+
+  const sendOld = useCallback(async () => {
+    setError('');
+    const res = await fetch('/api/auth/send-profile-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ purpose: 'email_old' }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? 'Failed to send code.');
+    setPhase1Sent(true);
+  }, [token]);
+
+  const verifyOld = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setVerifying1(true);
+    try {
+      const res = await fetch('/api/auth/change-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ phase: 'verify_old', otp: otp1 }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error ?? 'Verification failed.'); return; }
+      setPhase1Done(true);
+    } catch {
+      setError('Something went wrong.');
+    } finally {
+      setVerifying1(false);
+    }
+  };
+
+  const sendNew = useCallback(async () => {
+    if (!newEmail) throw new Error('Please enter your new email first.');
+    setError('');
+    const res = await fetch('/api/auth/send-profile-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ purpose: 'email_new', newEmail }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? 'Failed to send code.');
+    setPhase2Sent(true);
+  }, [token, newEmail]);
+
+  const confirmChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setVerifying2(true);
+    try {
+      const res = await fetch('/api/auth/change-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ phase: 'verify_new', otp: otp2, newEmail }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error ?? 'Email change failed.'); return; }
+      setSuccess('Email changed successfully! You will be logged out in a moment.');
+      setTimeout(() => logout(), 3000);
+    } catch {
+      setError('Something went wrong.');
+    } finally {
+      setVerifying2(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      {success && <Banner type="success" msg={success} />}
+      {error   && <Banner type="error"   msg={error}   />}
+
+      <div>
+        <Label>Current Email Address</Label>
+        <input type="text" value={email} readOnly className={`${inputCls} bg-gray-50 text-gray-400 cursor-not-allowed`} />
+      </div>
+
+      {/* Phase 1 */}
+      {!phase1Done ? (
+        <div className="p-4 rounded-xl bg-blue-50 border border-blue-100 space-y-3">
+          <p className="text-xs font-bold text-blue-700 uppercase tracking-wide" style={{ fontFamily: HL }}>
+            Step 1 — Verify Current Email
+          </p>
+          <SendOtpButton onSend={sendOld} label="Send Code to Current Email" />
+          {phase1Sent && (
+            <form onSubmit={verifyOld} className="space-y-2 pt-1">
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                value={otp1}
+                onChange={e => setOtp1(e.target.value.replace(/\D/g, ''))}
+                className={inputCls}
+                placeholder="6-digit code"
+              />
+              <button
+                type="submit"
+                disabled={verifying1 || otp1.length < 6}
+                className="w-full py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-60 transition"
+                style={{ backgroundColor: '#0B3D91', color: '#F5C518', fontFamily: BL }}
+              >
+                {verifying1 && <Loader2 className="w-4 h-4 animate-spin" />}
+                Verify
+              </button>
+            </form>
+          )}
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 text-green-700 text-sm font-semibold px-1" style={{ fontFamily: BL }}>
+          <Check className="w-4 h-4" /> Current email verified
+        </div>
+      )}
+
+      {/* Phase 2 */}
+      {phase1Done && (
+        <div className="p-4 rounded-xl bg-blue-50 border border-blue-100 space-y-3">
+          <p className="text-xs font-bold text-blue-700 uppercase tracking-wide" style={{ fontFamily: HL }}>
+            Step 2 — Set New Email
+          </p>
+          <div>
+            <Label>New Email Address</Label>
+            <input
+              type="email"
+              value={newEmail}
+              onChange={e => setNewEmail(e.target.value)}
+              className={inputCls}
+              placeholder="new@example.com"
+            />
+          </div>
+          <SendOtpButton onSend={sendNew} label="Send Code to New Email" />
+          {phase2Sent && (
+            <form onSubmit={confirmChange} className="space-y-2 pt-1">
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={6}
+                value={otp2}
+                onChange={e => setOtp2(e.target.value.replace(/\D/g, ''))}
+                className={inputCls}
+                placeholder="6-digit code sent to new email"
+              />
+              <button
+                type="submit"
+                disabled={verifying2 || otp2.length < 6}
+                className="w-full py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-60 transition"
+                style={{ backgroundColor: '#0B3D91', color: '#F5C518', fontFamily: BL }}
+              >
+                {verifying2 && <Loader2 className="w-4 h-4 animate-spin" />}
+                Confirm Email Change
+              </button>
+            </form>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main Page ─────────────────────────────────────────────────────────────────
+
+/**
+ * The listing behind a business account, on the profile page.
+ *
+ * An owner's details lived only on /lbo, which is a desktop-only dashboard, so
+ * on a phone there was nowhere to read what the site says about your own
+ * business — let alone ask for a correction.
+ *
+ * Read here, changed through review: every field carries a button that opens
+ * the owner's dashboard with a change request already filled in. Editing
+ * straight into the listing would put unreviewed text on a public page, which
+ * the tourism office decided against.
+ */
+function BusinessInfoPanel({ token }: { token: string }) {
+  // Nullable: /api/lbo/me returns null for fields the application left blank.
+  const [app, setApp] = useState<Record<string, string | null> | null>(null);
+  const [state, setState] = useState<'loading' | 'ready' | 'none' | 'error'>('loading');
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+
+    fetch('/api/lbo/me', { headers: { Authorization: `Bearer ${token}` } })
+      .then(async r => {
+        if (cancelled) return;
+        if (r.status === 403) { setState('none'); return; }
+        if (!r.ok) { setState('error'); return; }
+        const d = await r.json();
+        if (d.isLbo) { setApp(d.application); setState('ready'); }
+        else setState('none');
+      })
+      .catch(() => { if (!cancelled) setState('error'); });
+
+    return () => { cancelled = true; };
+  }, [token]);
+
+  if (state === 'loading') {
+    return <p className="text-sm text-gray-400 py-8 text-center">Loading your business details…</p>;
+  }
+
+  if (state === 'none') {
+    return (
+      <div className="text-center py-8">
+        <p className="text-sm text-gray-600 mb-1">No business is linked to this account.</p>
+        <p className="text-xs text-gray-400 mb-4">
+          If you run a business in Liliw, you can apply to have it listed.
+        </p>
+        <Link href="/business/apply"
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-white font-semibold text-sm"
+          style={{ backgroundColor: '#1565C0' }}>
+          Apply as a business owner
+        </Link>
+      </div>
+    );
+  }
+
+  if (state === 'error' || !app) {
+    return <p className="text-sm text-red-500 py-8 text-center">Your business details could not be loaded. Please try again.</p>;
+  }
+
+  // Every field is listed, filled or not. Empty rows used to be dropped, so a
+  // permit number that had never been submitted looked exactly like one the
+  // office had lost — and an owner cannot supply what the page never says is
+  // missing. It was also hiding a bug: /api/lbo/me did not return
+  // permit_number at all, so this row was blank on every account.
+  const FIELDS: { label: string; value?: string | null; requestAs?: string; hint?: string }[] = [
+    { label: 'Business name',     value: app.business_name,   requestAs: 'Name / Listing Title' },
+    { label: 'Listing name',      value: app.attraction_name, requestAs: 'Name / Listing Title' },
+    { label: 'Owner',             value: app.owner_name },
+    { label: 'Email',             value: app.email },
+    { label: 'Contact number',    value: app.phone,           requestAs: 'Contact Number' },
+    { label: 'Address',           value: app.address,         requestAs: 'Location / Address' },
+    { label: 'Business type',     value: app.business_type,   requestAs: 'Business Type' },
+    { label: "Permit / DTI no.",  value: app.permit_number,   requestAs: 'Business Permit / DTI Number',
+      hint: 'Optional at sign-up. Submit it and CHATO will add it to your record.' },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3">
+        <p className="text-xs text-gray-600 leading-relaxed">
+          These are the details CHATO holds for your business. Changes go to the tourism office
+          for review before they appear on your public listing.
+        </p>
+      </div>
+
+      <dl className="divide-y divide-gray-100">
+        {FIELDS.map(f => {
+          const missing = !f.value || !String(f.value).trim();
+          return (
+            <div key={f.label} className="py-3 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <dt className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">{f.label}</dt>
+                {missing ? (
+                  <>
+                    <dd className="text-sm mt-0.5 italic" style={{ color: '#B45309' }}>Not submitted yet</dd>
+                    {f.hint && <p className="text-[11px] text-gray-400 mt-1 leading-relaxed">{f.hint}</p>}
+                  </>
+                ) : (
+                  <dd className="text-sm text-gray-800 mt-0.5 break-words">{f.value}</dd>
+                )}
+              </div>
+              {f.requestAs && (
+                <Link href="/lbo"
+                  title={missing ? `Submit your ${f.label.toLowerCase()}` : `Request a change to ${f.label.toLowerCase()}`}
+                  className="shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg border transition hover:bg-blue-50"
+                  style={missing
+                    ? { borderColor: 'rgba(180,83,9,0.3)', color: '#B45309' }
+                    : { borderColor: 'rgba(11,61,145,0.2)', color: '#1565C0' }}>
+                  {missing ? 'Submit' : 'Request change'}
+                </Link>
+              )}
+            </div>
+          );
+        })}
+      </dl>
+
+      <Link href="/lbo"
+        className="w-full inline-flex items-center justify-center gap-2 py-3 rounded-xl text-white font-semibold text-sm transition hover:opacity-90"
+        style={{ backgroundColor: '#1565C0' }}>
+        Open business dashboard
+      </Link>
+    </div>
+  );
+}
+
+export default function EditProfilePage() {
+  const router = useRouter();
+  const { user, token, loading, logout } = useAuth();
+  const [tab, setTab] = useState<Tab>('profile');
+  // Asked once, so the tab is not offered to the visitors it does not apply to.
+  const [isLbo, setIsLbo] = useState(false);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    fetch('/api/lbo/me', { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => (r.ok ? r.json() : { isLbo: false }))
+      .then(d => { if (!cancelled) setIsLbo(!!d.isLbo); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [token]);
+
+  useEffect(() => {
+    if (!loading && !user) router.replace('/');
+  }, [user, loading, router]);
+
+  if (loading || !user) return null;
+
+  const initials = (user.username ?? 'U').charAt(0).toUpperCase();
+  const safeToken = token ?? '';
+
+  const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
+    { key: 'profile',  label: 'Profile Info',     icon: <User  className="w-3.5 h-3.5" /> },
+    { key: 'password', label: 'Change Password',  icon: <Lock  className="w-3.5 h-3.5" /> },
+    { key: 'email',    label: 'Change Email',      icon: <Mail  className="w-3.5 h-3.5" /> },
+    ...(isLbo ? [{ key: 'business' as Tab, label: 'My Business', icon: <Building2 className="w-3.5 h-3.5" /> }] : []),
+  ];
+
+  return (
+    <div className="min-h-screen page-ground">
+
+      {/* Hero */}
+      <div style={{ background: 'linear-gradient(135deg,#0B3D91 0%,#1565C0 100%)' }}>
+        <div className="max-w-2xl mx-auto px-4 py-12">
+          <motion.div initial={{ y: -16, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ duration: 0.45 }}>
+            <Link
+              href="/profile"
+              className="inline-flex items-center font-semibold mb-6 group text-sm"
+              style={{ color: '#F5C518', fontFamily: BL }}
+            >
+              <ChevronLeft className="w-4 h-4 mr-1 group-hover:-translate-x-1 transition" />
+              Back to Profile
+            </Link>
+
+            <div className="flex items-center gap-4">
+              <div
+                className="w-14 h-14 rounded-2xl flex items-center justify-center text-xl font-bold shrink-0"
+                style={{ backgroundColor: '#F5C518', color: '#1565C0', fontFamily: HL }}
+              >
+                {initials}
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-white" style={{ fontFamily: HL }}>Edit Profile</h1>
+                <p className="text-white/60 text-sm mt-0.5" style={{ fontFamily: BL }}>{user.email}</p>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="max-w-2xl mx-auto px-4 py-8">
+
+        {/* Tab bar */}
+        <div className="flex gap-2 mb-6 flex-wrap">
+          {tabs.map(t => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-semibold transition"
+              style={{
+                backgroundColor: tab === t.key ? '#0B3D91' : '#fff',
+                color: tab === t.key ? '#F5C518' : '#374151',
+                fontFamily: BL,
+                border: tab === t.key ? '2px solid #0B3D91' : '2px solid #E5E7EB',
+              }}
+            >
+              {t.icon}
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab panels */}
+        <motion.div
+          key={tab}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25 }}
+          className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6"
+        >
+          {tab === 'profile' && (
+            <ProfileTab token={safeToken} email={user.email} username={user.username} />
+          )}
+          {tab === 'password' && (
+            <PasswordTab token={safeToken} email={user.email} />
+          )}
+          {tab === 'business' && <BusinessInfoPanel token={safeToken} />}
+          {tab === 'email' && (
+            <EmailTab token={safeToken} email={user.email} logout={logout} />
+          )}
+        </motion.div>
+      </div>
+    </div>
+  );
+}

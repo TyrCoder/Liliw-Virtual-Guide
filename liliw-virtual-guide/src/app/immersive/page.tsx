@@ -1,0 +1,827 @@
+'use client';
+
+import { useEffect, useState, useCallback, useRef, type ChangeEvent } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import Link from 'next/link';
+import {
+  ChevronLeft, Layers, PenLine, Lock, X, Eye, EyeOff, Camera, Trash2, Upload, Images,
+  Box, Hand, MousePointer2, Smartphone, Maximize2, Headphones,
+} from 'lucide-react';
+import { Rule, weaveStyle } from '@/components/liliw/festive';
+import { logger } from '@/lib/logger';
+import ImmersiveViewer from '@/components/ImmersiveViewer';
+import CloudinaryPicker, { type CloudinaryAsset } from '@/components/CloudinaryPicker';
+import type { Hotspot } from '@/lib/types';
+import { useAuth } from '@/context/AuthContext';
+import { fitForUpload, MAX_UPLOAD_BYTES } from '@/lib/image-fit';
+
+const EDITOR_PASSWORD = 'LiliwOffice2026';
+const CLOUDINARY_FOLDER = 'liliw-virtual-tours';
+const STRAPI_BASE = (process.env.NEXT_PUBLIC_STRAPI_URL || '').replace(/\/$/, '');
+
+interface VirtualTourPhoto {
+  url: string;
+  name: string;
+  public_id: string;
+}
+
+interface Attraction {
+  id: string;
+  strapiId?: number | string;
+  attributes: {
+    name: string;
+    description?: string;
+    location?: string;
+    category?: string;
+    has_virtual_tour?: boolean;
+    hotspots?: Hotspot[];
+    photos?: Array<{ id: number; url: string; name: string }>;
+    virtual_tour_photos?: VirtualTourPhoto[];
+  };
+  type: 'heritage' | 'spot' | 'dining' | 'footwear' | 'stay';
+}
+
+/**
+ * The picture on a tour card.
+ *
+ * A normal photograph of the place first, and only the panorama as a fallback:
+ * a 14×11 crop of an equirectangular image is a smear of sky and floor, which
+ * is the opposite of what a chooser needs. Relative URLs are resolved the same
+ * way the attractions page resolves them.
+ */
+function tourThumb(a: Attraction): string | null {
+  const p: any = a.attributes.photos?.[0];
+  const raw = p?.formats?.small?.url || p?.formats?.medium?.url || p?.url
+    || a.attributes.virtual_tour_photos?.[0]?.url;
+  if (!raw) return null;
+  const url = raw.startsWith('http') ? raw : `${STRAPI_BASE}${raw}`;
+  return url.includes('res.cloudinary.com')
+    ? url.replace('/upload/', '/upload/w_160,h_128,c_fill,q_auto,f_auto/')
+    : url;
+}
+
+/** The sidebar card. One object so the two panels cannot drift apart. */
+const PANEL = {
+  backgroundColor: 'rgba(10,29,72,0.82)',
+  border: '1px solid rgba(245,197,24,0.22)',
+  boxShadow: '0 10px 30px rgba(3,12,36,0.45)',
+} as const;
+
+function PanelTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-3">
+      <h2 className="text-white font-black text-[11px] uppercase tracking-[0.18em]">{children}</h2>
+      <div className="mt-1.5 h-px w-10" style={{ backgroundColor: '#F5C518' }} />
+    </div>
+  );
+}
+
+const CONTROLS = [
+  { Icon: Hand,          verb: 'Drag',       what: 'Look around' },
+  { Icon: MousePointer2, verb: 'Scroll',     what: 'Zoom in and out' },
+  { Icon: Smartphone,    verb: 'Touch',      what: 'Swipe to move around' },
+  { Icon: Maximize2,     verb: 'Fullscreen', what: 'Expand the view' },
+  { Icon: Headphones,    verb: 'VR',         what: 'Enter VR with a headset' },
+] as const;
+
+export default function ImmersivePage() {
+  const [editMode, setEditMode] = useState(false);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
+  const [attractions, setAttractions] = useState<Attraction[]>([]);
+  const [selectedAttractionId, setSelectedAttractionId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [virtualTourPhotos, setVirtualTourPhotos] = useState<VirtualTourPhoto[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState('');
+  const [uploadError, setUploadError] = useState('');
+  const [uploadNotice, setUploadNotice] = useState('');
+  const [saveStatus, setSaveStatus]   = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [pickerOpen, setPickerOpen]   = useState(false);
+  const passwordInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const virtualTourPhotosRef = useRef<VirtualTourPhoto[]>([]);
+  useEffect(() => { virtualTourPhotosRef.current = virtualTourPhotos; }, [virtualTourPhotos]);
+
+  const { isAdmin, token } = useAuth();
+
+  // Auto-enable editor mode for admin users
+  useEffect(() => {
+    if (isAdmin) {
+      setEditMode(true);
+    }
+  }, [isAdmin]);
+
+  // `fresh` bypasses the CDN copy. /api/content/attractions is served with
+  // s-maxage=120, which is right for visitors but wrong for an editor: saving
+  // a tour and reloading inside that window showed the old, empty version and
+  // read as the save having failed.
+  const loadAttractions = useCallback(async (fresh = false) => {
+    try {
+      const res = await fetch(
+        fresh ? `/api/content/attractions?fresh=${Date.now()}` : '/api/content/attractions',
+        fresh ? { cache: 'no-store' } : undefined,
+      );
+      const json = await res.json();
+      const all: Attraction[] = json.data || [];
+      setAttractions(all);
+      setSelectedAttractionId(prev => {
+        if (prev && all.some(a => a.id === prev)) return prev;
+        return all.find(a => a.attributes.has_virtual_tour)?.id ?? all[0]?.id ?? null;
+      });
+    } catch (err) {
+      logger.error('Error fetching attractions:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  /**
+   * Always read past the caches on this page.
+   *
+   * There are now three layers between a save and what is on screen: the
+   * five-minute memory cache in lib/content, the CDN's s-maxage=120, and — new
+   * — the service worker, which caches /api/content/* for offline use. A tour
+   * saved a minute ago could come back without its scenes from any of them,
+   * and to whoever placed those hotspots that looks exactly like the work
+   * having been thrown away.
+   *
+   * This page is a handful of visits a day and an editing tool. It can afford
+   * to skip every cache; being certain of what is stored matters more here
+   * than a cached response does.
+   */
+  useEffect(() => { loadAttractions(true); }, [loadAttractions]);
+
+  const selectedAttraction = attractions.find((a) => a.id === selectedAttractionId);
+
+  // Sync virtualTourPhotos from Strapi data whenever attraction changes
+  useEffect(() => {
+    setVirtualTourPhotos(selectedAttraction?.attributes.virtual_tour_photos ?? []);
+  }, [selectedAttractionId, selectedAttraction]);
+
+  useEffect(() => {
+    if (showPasswordModal) {
+      setTimeout(() => passwordInputRef.current?.focus(), 100);
+    } else {
+      setPassword('');
+      setPasswordError('');
+      setShowPassword(false);
+    }
+  }, [showPasswordModal]);
+
+  const handlePasswordSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (password === EDITOR_PASSWORD) {
+      setEditMode(true);
+      setShowPasswordModal(false);
+    } else {
+      setPasswordError('Incorrect password.');
+      setPassword('');
+    }
+  };
+
+  // Upload one file directly to Cloudinary (browser → Cloudinary, zero Strapi memory)
+  const uploadOneFile = async (file: File): Promise<VirtualTourPhoto> => {
+    const timestamp = Math.round(Date.now() / 1000);
+
+    const signRes = await fetch('/api/cloudinary-sign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ timestamp, folder: CLOUDINARY_FOLDER }),
+    });
+    if (!signRes.ok) throw new Error('Failed to get upload signature');
+    const { signature, api_key, cloud_name } = await signRes.json();
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('api_key', api_key);
+    formData.append('timestamp', String(timestamp));
+    formData.append('signature', signature);
+    formData.append('folder', CLOUDINARY_FOLDER);
+
+    const uploadRes = await fetch(
+      `https://api.cloudinary.com/v1_1/${cloud_name}/image/upload`,
+      { method: 'POST', body: formData }
+    );
+    if (!uploadRes.ok) {
+      const err = await uploadRes.json();
+      throw new Error(err?.error?.message || 'Cloudinary upload failed');
+    }
+    const result = await uploadRes.json();
+
+    return {
+      url: result.secure_url,
+      name: file.name.replace(/\.[^.]+$/, ''),
+      public_id: result.public_id,
+    };
+  };
+
+  const savePhotosToStrapi = async (photos: VirtualTourPhoto[]) => {
+    if (!selectedAttraction?.strapiId) return;
+    setSaveStatus('saving');
+    try {
+      const res = await fetch('/api/save-virtual-tour-photos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          attractionType: selectedAttraction.type,
+          strapiId: selectedAttraction.strapiId,
+          photos,
+        }),
+      });
+      if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(`Save failed (${res.status}): ${detail.slice(0, 200)}`);
+      }
+      setSaveStatus('saved');
+      setTimeout(() => setSaveStatus('idle'), 2000);
+    } catch (err) {
+      logger.error('Saving tour photos failed', err);
+      setUploadError(err instanceof Error ? err.message : 'Could not save the tour.');
+      setSaveStatus('error');
+      setTimeout(() => setSaveStatus('idle'), 3000);
+    }
+  };
+
+  const handleFileUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+    if (fileInputRef.current) fileInputRef.current.value = '';
+
+    setUploading(true);
+    setUploadError('');
+    const newPhotos: VirtualTourPhoto[] = [];
+    // Panoramas are the biggest files anyone uploads here, so this is exactly
+    // where the 10 MB cap bites — and until now every failure went to the
+    // console only, leaving the panel looking like the upload had worked.
+    const failures: string[] = [];
+    const resized: string[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      setUploadStatus(`${i + 1} / ${files.length}`);
+
+      // Cloudinary caps uploads at 10 MB. Panoramas routinely exceed it, so
+      // shrink to fit rather than refuse — see lib/image-fit.
+      if (files[i].size > MAX_UPLOAD_BYTES) setUploadStatus(`resizing ${i + 1} / ${files.length}`);
+      const fitted = await fitForUpload(files[i]);
+      if (fitted.error) { failures.push(fitted.error); continue; }
+      if (fitted.shrunk) {
+        resized.push(`${files[i].name} (${(fitted.originalBytes / 1024 / 1024).toFixed(1)} → ${(fitted.file.size / 1024 / 1024).toFixed(1)} MB)`);
+      }
+      setUploadStatus(`${i + 1} / ${files.length}`);
+
+      try {
+        const photo = await uploadOneFile(fitted.file);
+        newPhotos.push(photo);
+      } catch (err) {
+        logger.error(`Upload failed for ${files[i].name}`, err);
+        failures.push(`${files[i].name}: ${err instanceof Error ? err.message : 'upload failed'}`);
+      }
+    }
+
+    setUploading(false);
+    setUploadStatus('');
+    setUploadNotice(resized.length ? `Resized to fit the 10 MB limit: ${resized.join(', ')}` : '');
+    if (failures.length) setUploadError(failures.join(' · '));
+
+    if (newPhotos.length > 0) {
+      const updated = [...virtualTourPhotos, ...newPhotos];
+      setVirtualTourPhotos(updated);
+      await savePhotosToStrapi(updated);
+    }
+  };
+
+  const deletePhoto = async (index: number) => {
+    const updated = virtualTourPhotos.filter((_, i) => i !== index);
+    setVirtualTourPhotos(updated);
+    await savePhotosToStrapi(updated);
+  };
+
+  const cloudinaryTransform = (url: string, transforms: string) => {
+    if (!url.includes('res.cloudinary.com')) return url;
+    return url.replace('/upload/', `/upload/${transforms}/`);
+  };
+
+  // The sphere gets the original file, untransformed.
+  //
+  // Uploads are already capped at 10 MB and panoramas are stored as JPEG, so
+  // there is nothing to gain by sending them through Cloudinary again — and
+  // something to lose: every transformation re-encodes, and a second
+  // generation of JPEG loss on top of an already-compressed panorama is
+  // visible as exactly the softness this is meant to avoid. The stored
+  // panorama is what gets drawn.
+  const sceneUrls = (url: string) => ({
+    imageUrl: url,
+    // Interim texture while the full one loads. Small enough to arrive almost
+    // immediately, large enough to be legible rather than a blur.
+    thumbUrl: cloudinaryTransform(url, 'w_1600,q_60,f_auto'),
+  });
+
+  // Called from HotspotDialog when admin uploads a new 360° scene inline
+  const handleUploadScene = async (file: File) => {
+    // Same 10 MB ceiling applies to a scene added from inside a hotspot.
+    const fitted = await fitForUpload(file);
+    if (fitted.error) throw new Error(fitted.error);
+    const photo = await uploadOneFile(fitted.file);
+    const idx = virtualTourPhotosRef.current.length;
+    const scene = {
+      id: photo.public_id,
+      title: photo.name || `Scene ${idx + 1}`,
+      ...sceneUrls(photo.url),
+    };
+    return { scene, photo };
+  };
+
+  // Called when a hotspot confirms with a new scene — stage the photo; saved on next Save click
+  const handleNewScene = (photo: VirtualTourPhoto, _idx: number) => {
+    setVirtualTourPhotos((prev) => [...prev, photo]);
+  };
+
+  // Scenes for the viewer — thumb loads instantly (<100ms), full-res swaps in silently
+  const scenes = virtualTourPhotos.map((photo, idx) => ({
+    id: photo.public_id || String(idx),
+    title: photo.name || `Scene ${idx + 1}`,
+    ...sceneUrls(photo.url),
+  }));
+
+  const saveHotspots = useCallback(async (hotspots: Hotspot[]) => {
+    if (!selectedAttraction?.strapiId) {
+      throw new Error(`No strapiId for attraction "${selectedAttraction?.attributes?.name}"`);
+    }
+    logger.info(`Saving ${hotspots.length} hotspots + ${virtualTourPhotosRef.current.length} photos for ${selectedAttraction.type}/${selectedAttraction.strapiId}`);
+
+    const [hRes, pRes] = await Promise.all([
+      fetch('/api/save-hotspots', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          attractionType: selectedAttraction.type,
+          strapiId: selectedAttraction.strapiId,
+          hotspots,
+        }),
+      }),
+      fetch('/api/save-virtual-tour-photos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          attractionType: selectedAttraction.type,
+          strapiId: selectedAttraction.strapiId,
+          photos: virtualTourPhotosRef.current,
+        }),
+      }),
+    ]);
+
+    if (!hRes.ok) {
+      const text = await hRes.text();
+      throw new Error(`Hotspots save failed (${hRes.status}): ${text}`);
+    }
+    if (!pRes.ok) {
+      const text = await pRes.text();
+      throw new Error(`Photos save failed (${pRes.status}): ${text}`);
+    }
+  }, [selectedAttraction]);
+
+  return (
+    <div className="min-h-screen relative" style={{ backgroundColor: '#08183C' }}>
+      {/* The weave, at the edges only and barely there. The panorama is the
+          brightest thing on the page and has to stay that way, so the pattern
+          fades out well before it reaches the viewer. */}
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-0 z-0"
+        style={{
+          ...weaveStyle('#F5C518', 0.055),
+          maskImage: 'radial-gradient(ellipse at 50% 45%, transparent 45%, black 100%)',
+          WebkitMaskImage: 'radial-gradient(ellipse at 50% 45%, transparent 45%, black 100%)',
+        }}
+      />
+      {/* Password Modal */}
+      <AnimatePresence>
+        {showPasswordModal && !isAdmin && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}
+            onClick={(e) => { if (e.target === e.currentTarget) setShowPasswordModal(false); }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-gray-900 rounded-2xl p-6 w-full max-w-sm mx-4 border-2"
+              style={{ borderColor: '#FFB400' }}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Lock className="w-5 h-5" style={{ color: '#FFB400' }} />
+                  <h2 className="text-white font-bold text-lg">Editor Access</h2>
+                </div>
+                <button onClick={() => setShowPasswordModal(false)} className="text-gray-400 hover:text-white transition">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <form onSubmit={handlePasswordSubmit} className="space-y-4">
+                <div className="relative">
+                  <input
+                    ref={passwordInputRef}
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => { setPassword(e.target.value); setPasswordError(''); }}
+                    placeholder="Enter password"
+                    className="w-full bg-gray-800 text-white rounded-lg px-4 py-3 pr-12 border border-gray-700 focus:outline-none focus:border-yellow-400 transition"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white transition"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                {passwordError && <p className="text-red-400 text-sm">{passwordError}</p>}
+                <button
+                  type="submit"
+                  className="w-full py-3 rounded-lg font-bold transition"
+                  style={{ backgroundColor: '#FFB400', color: '#0F1F3C' }}
+                >
+                  Enter Editor
+                </button>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Header. A thin woven band, a royal-blue bar and a gold hairline —
+          the same three notes the page banners use, at nav height. */}
+      <motion.nav
+        initial={{ y: -20, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.4 }}
+        className="sticky top-0 z-40 backdrop-blur-sm"
+        style={{
+          backgroundColor: 'rgba(11, 61, 145, 0.97)',
+          borderBottom: '1px solid rgba(245,197,24,0.85)',
+          boxShadow: '0 6px 20px rgba(3,12,36,0.45)',
+        }}
+      >
+        <div aria-hidden className="h-1 w-full" style={weaveStyle('#F5C518', 0.3)} />
+
+        <div className="page-wrap px-4 sm:px-6 py-3.5 flex items-center justify-between gap-3">
+          <motion.div whileHover={{ x: -2 }} whileTap={{ x: -4 }} className="shrink-0">
+            <Link href="/attractions"
+              className="inline-flex items-center gap-1.5 text-sm font-bold transition px-2.5 py-2 rounded-lg hover:bg-white/10"
+              style={{ color: '#F5C518' }}>
+              <ChevronLeft className="w-4 h-4" />
+              <span className="hidden sm:inline">Back</span>
+            </Link>
+          </motion.div>
+
+          <div className="flex flex-col items-center min-w-0">
+            <h1 className="text-lg sm:text-2xl font-black text-white flex items-center gap-2.5 uppercase tracking-[0.16em] whitespace-nowrap">
+              <Box className="w-5 h-5 sm:w-6 sm:h-6 shrink-0" style={{ color: '#F5C518' }} />
+              3D Tours
+              {editMode && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 tracking-normal"
+                  style={{ backgroundColor: '#FFB400', color: '#0F1F3C' }}>
+                  <PenLine className="w-3 h-3" /> Editor
+                </span>
+              )}
+            </h1>
+            <div className="mt-1.5 hidden sm:block"><Rule width={90} /></div>
+          </div>
+
+          {/* Hidden admin lock */}
+          <div className="w-12 sm:w-16 flex justify-end">
+            {editMode ? (
+              <button
+                onClick={() => setEditMode(false)}
+                title="Exit editor"
+                className="text-yellow-400 hover:text-yellow-300 transition p-2 rounded-lg hover:bg-white/10"
+              >
+                <Lock className="w-4 h-4" />
+              </button>
+            ) : (
+              <button
+                onClick={() => { if (!isAdmin) setShowPasswordModal(true); }}
+                title=""
+                className="transition p-2 rounded-lg hover:bg-white/5"
+                style={{ color: 'rgba(255,255,255,0.12)' }}
+                onMouseEnter={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.35)')}
+                onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.12)')}
+              >
+                <Lock className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </div>
+      </motion.nav>
+
+      {/* Main Content */}
+      <div className="relative z-10 max-w-[1600px] mx-auto px-3 sm:px-5 py-5">
+        {loading ? (
+          <div className="text-center py-24">
+            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 mx-auto" style={{ borderColor: '#F5C518' }} />
+            <p className="text-white/70 mt-4 text-sm tracking-wide">Loading the tours…</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+            {/* Viewer */}
+            <motion.div
+              // No x here. A transform on this column makes it the containing
+              // block for the viewer's fullscreen, which then fills the column
+              // instead of the screen — the navbar stayed visible above it.
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.6 }}
+              className="lg:col-span-4"
+            >
+              {selectedAttraction && scenes.length > 0 ? (
+                <ImmersiveViewer
+                  key={selectedAttractionId}
+                  title={selectedAttraction.attributes.name}
+                  scenes={scenes}
+                  description={selectedAttraction.attributes.description}
+                  editMode={editMode}
+                  initialHotspots={selectedAttraction.attributes.hotspots ?? []}
+                  onSaveHotspots={saveHotspots}
+                  onUploadScene={handleUploadScene}
+                  onNewScene={handleNewScene}
+                />
+              ) : selectedAttraction && scenes.length === 0 && editMode ? (
+                <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed py-24 text-center"
+                  style={{ borderColor: '#FFB400', backgroundColor: 'rgba(255,180,0,0.05)' }}>
+                  <Camera className="w-16 h-16 mb-4" style={{ color: '#FFB400' }} />
+                  <p className="text-white font-bold text-lg mb-2">No 360° photos yet</p>
+                  <p className="text-gray-400 text-sm">Upload photos using the panel on the right</p>
+                </div>
+              ) : selectedAttraction && scenes.length === 0 ? (
+                <div className="flex flex-col items-center justify-center rounded-2xl py-24 text-center"
+                  style={{ border: '1px dashed rgba(245,197,24,0.28)', backgroundColor: 'rgba(10,29,72,0.6)' }}>
+                  <Layers className="w-14 h-14 mb-4 opacity-30" style={{ color: '#F5C518' }} />
+                  <p className="text-white font-bold text-lg mb-1">No 3D tour available</p>
+                  <p className="text-sm" style={{ color: '#8FA6CC' }}>Pick a tour from the list to start exploring</p>
+                </div>
+              ) : null}
+            </motion.div>
+
+            {/* Sidebar */}
+            <motion.div
+              initial={{ x: 20, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              transition={{ duration: 0.6, delay: 0.2 }}
+              className="lg:col-span-1 space-y-4"
+            >
+              {/* Attraction List */}
+              <div className="sticky top-24 space-y-4">
+                <div className="rounded-2xl p-4" style={PANEL}>
+                  <PanelTitle>{editMode ? 'All Attractions' : 'Available Tours'}</PanelTitle>
+
+                  <div className="space-y-2 max-h-[26rem] overflow-y-auto pr-0.5 tour-scroll">
+                    {(editMode ? attractions : attractions.filter(a => a.attributes.has_virtual_tour)).map((attraction, index) => {
+                      const active = selectedAttractionId === attraction.id;
+                      const thumb = tourThumb(attraction);
+                      return (
+                        <motion.button
+                          key={attraction.id}
+                          initial={{ y: 10, opacity: 0 }}
+                          animate={{ y: 0, opacity: 1 }}
+                          transition={{ duration: 0.3, delay: index * 0.05 }}
+                          onClick={() => setSelectedAttractionId(attraction.id)}
+                          className="w-full text-left rounded-xl transition-all flex items-center gap-3 p-2.5"
+                          style={{
+                            backgroundColor: active ? 'rgba(21,101,192,0.32)' : 'rgba(255,255,255,0.03)',
+                            border: `1px solid ${active ? 'rgba(245,197,24,0.55)' : 'rgba(255,255,255,0.07)'}`,
+                            borderLeft: `3px solid ${active ? '#F5C518' : 'transparent'}`,
+                            boxShadow: active ? '0 6px 18px rgba(3,12,36,0.5)' : 'none',
+                          }}
+                        >
+                          {/* A picture of the place beats its name for choosing
+                              between three tours, so the thumbnail leads. */}
+                          <div className="shrink-0 w-14 h-11 rounded-lg overflow-hidden"
+                            style={{ backgroundColor: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                            {thumb
+                              ? <img src={thumb} alt="" className="w-full h-full object-cover" loading="lazy" />
+                              : <div className="w-full h-full flex items-center justify-center">
+                                  <Layers className="w-4 h-4" style={{ color: 'rgba(245,197,24,0.4)' }} />
+                                </div>}
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <div className={`text-sm leading-tight truncate ${active ? 'text-white font-bold' : 'text-gray-200 font-semibold'}`}>
+                              {attraction.attributes.name}
+                            </div>
+                            <div className="flex items-center justify-between gap-2 mt-1">
+                              <span className="text-[11px]" style={{ color: '#8FA6CC' }}>
+                                {attraction.type === 'heritage' ? 'Heritage' : attraction.type === 'dining' ? 'Dining' : attraction.type === 'footwear' ? 'Footwear Store' : attraction.type === 'stay' ? 'Accommodations' : 'Tourist Spot'}
+                              </span>
+                              {attraction.attributes.has_virtual_tour && (
+                                <span className="shrink-0 text-[10px] font-black px-1.5 py-0.5 rounded"
+                                  style={{
+                                    backgroundColor: active ? '#F5C518' : 'rgba(245,197,24,0.16)',
+                                    color: active ? '#0A1A40' : '#F5C518',
+                                  }}>
+                                  360°
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </motion.button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 360° Photo Manager — edit mode only */}
+                <AnimatePresence>
+                  {editMode && selectedAttraction && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 10 }}
+                      className="bg-gray-900 rounded-xl p-4 border-2"
+                      style={{ borderColor: '#FFB400' }}
+                    >
+                      <h2 className="text-white font-bold mb-3 flex items-center gap-2">
+                        <Camera className="w-4 h-4" style={{ color: '#FFB400' }} />
+                        360° Photos
+                        {saveStatus === 'saving' && <span className="text-xs text-gray-400 ml-auto">Saving…</span>}
+                        {saveStatus === 'saved' && <span className="text-xs text-green-400 ml-auto">Saved ✓</span>}
+                        {saveStatus === 'error' && <span className="text-xs text-red-400 ml-auto">Save failed</span>}
+                      </h2>
+
+                      {/* Current photos */}
+                      {virtualTourPhotos.length > 0 ? (
+                        <div className="space-y-2 mb-3 max-h-44 overflow-y-auto">
+                          {virtualTourPhotos.map((photo, idx) => (
+                            <div key={photo.public_id || idx} className="flex items-center gap-2 bg-gray-800 rounded-lg p-2">
+                              <img
+                                src={photo.url}
+                                alt={photo.name}
+                                className="w-12 h-7 object-cover rounded flex-shrink-0"
+                              />
+                              {/* The name defaults to the uploaded filename, which
+                                  is what visitors then see labelling the scene.
+                                  Editable so it can read like a place. */}
+                              <input
+                                value={photo.name}
+                                onChange={e => setVirtualTourPhotos(prev =>
+                                  prev.map((p, i) => i === idx ? { ...p, name: e.target.value } : p))}
+                                onBlur={() => savePhotosToStrapi(virtualTourPhotos)}
+                                onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                                placeholder={`Scene ${idx + 1}`}
+                                title="Rename this scene"
+                                className="flex-1 min-w-0 bg-transparent text-gray-200 text-xs px-1.5 py-1 rounded border border-transparent hover:border-gray-600 focus:border-yellow-500 focus:bg-gray-900 focus:outline-none transition"
+                              />
+                              <button
+                                onClick={() => deletePhoto(idx)}
+                                className="text-red-400 hover:text-red-300 flex-shrink-0 transition"
+                                title="Remove photo"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-gray-500 text-xs mb-3">No photos yet. Upload 360° panoramic images below.</p>
+                      )}
+
+                      {/* There is no "has a virtual tour" switch anywhere — the
+                          tour is published purely by having a photo. Say so,
+                          because an invisible rule looks like a missing one. */}
+                      <div className="mb-3 rounded-lg px-3 py-2 text-[11px] leading-relaxed"
+                        style={{
+                          backgroundColor: virtualTourPhotos.length > 0 ? 'rgba(34,197,94,0.12)' : 'rgba(255,255,255,0.05)',
+                          color: virtualTourPhotos.length > 0 ? '#4ADE80' : '#9CA3AF',
+                        }}>
+                        {virtualTourPhotos.length > 0
+                          ? `Live for visitors — this attraction now shows under Available Tours with ${virtualTourPhotos.length} scene${virtualTourPhotos.length === 1 ? '' : 's'}.`
+                          : 'Not published yet. Adding one 360° photo publishes the tour automatically — there is no separate switch to tick.'}
+                      </div>
+
+                      {uploadNotice && (
+                        <div className="mb-3 rounded-lg px-3 py-2 text-[11px] leading-relaxed flex items-start gap-2"
+                          style={{ backgroundColor: 'rgba(96,165,250,0.12)', color: '#93C5FD' }}>
+                          <span className="flex-1 min-w-0 break-words">{uploadNotice}</span>
+                          <button onClick={() => setUploadNotice('')} className="shrink-0 opacity-70 hover:opacity-100">✕</button>
+                        </div>
+                      )}
+
+                      {uploadError && (
+                        <div className="mb-3 rounded-lg px-3 py-2 text-[11px] leading-relaxed flex items-start gap-2"
+                          style={{ backgroundColor: 'rgba(248,113,113,0.12)', color: '#FCA5A5' }}>
+                          <span className="flex-1 min-w-0 break-words">{uploadError}</span>
+                          <button onClick={() => setUploadError('')} className="shrink-0 opacity-70 hover:opacity-100">✕</button>
+                        </div>
+                      )}
+
+                      {/* Upload + Library buttons */}
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        multiple
+                        accept="image/*"
+                        className="hidden"
+                        onChange={handleFileUpload}
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={uploading}
+                          className="flex-1 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition disabled:opacity-60"
+                          style={{ backgroundColor: '#FFB400', color: '#0F1F3C' }}
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          {uploading ? uploadStatus : 'Upload'}
+                        </button>
+                        <button
+                          onClick={() => setPickerOpen(true)}
+                          disabled={uploading}
+                          className="flex-1 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 border transition disabled:opacity-60"
+                          style={{ borderColor: '#FFB400', color: '#FFB400' }}
+                        >
+                          <Images className="w-3.5 h-3.5" />
+                          Library
+                        </button>
+                      </div>
+
+                      {/* Progress bar */}
+                      {uploading && (
+                        <div className="mt-2 bg-gray-800 rounded-full h-1.5 overflow-hidden">
+                          <div className="h-1.5 rounded-full animate-pulse" style={{ width: '100%', backgroundColor: '#F5C518' }} />
+                        </div>
+                      )}
+
+                      <p className="text-gray-600 text-xs mt-2">
+                        JPG recommended. Files upload directly to Cloudinary — no server memory used.
+                      </p>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Tour controls — hidden in edit mode to save space */}
+                {!editMode && (
+                  <motion.div
+                    initial={{ y: 20, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    transition={{ duration: 0.6, delay: 0.4 }}
+                    className="rounded-2xl p-4"
+                    style={PANEL}
+                  >
+                    <PanelTitle>Tour Controls</PanelTitle>
+                    <ul className="space-y-2.5">
+                      {CONTROLS.map(({ Icon, verb, what }) => (
+                        <li key={verb} className="flex items-center gap-3">
+                          <span className="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center"
+                            style={{ backgroundColor: 'rgba(245,197,24,0.12)', border: '1px solid rgba(245,197,24,0.22)' }}>
+                            <Icon className="w-3.5 h-3.5" style={{ color: '#F5C518' }} />
+                          </span>
+                          <span className="text-sm text-white font-semibold w-[4.5rem] shrink-0">{verb}</span>
+                          <span className="text-xs" style={{ color: '#8FA6CC' }}>{what}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </motion.div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </div>
+
+      {/* The tour list scrolls; the default bar is a bright slab against the
+          navy panel, so it is toned to the card it sits in. */}
+      <style>{`
+        .tour-scroll { scrollbar-width: thin; scrollbar-color: rgba(245,197,24,0.35) transparent; }
+        .tour-scroll::-webkit-scrollbar { width: 6px; }
+        .tour-scroll::-webkit-scrollbar-track { background: transparent; }
+        .tour-scroll::-webkit-scrollbar-thumb { background: rgba(245,197,24,0.3); border-radius: 999px; }
+        .tour-scroll::-webkit-scrollbar-thumb:hover { background: rgba(245,197,24,0.5); }
+      `}</style>
+
+      {/* Cloudinary library picker for 360° photos */}
+      <CloudinaryPicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        folder="liliw-virtual-tours"
+        multiple
+        signEndpoint="/api/cloudinary-sign"
+        onSelect={async (assets: CloudinaryAsset[]) => {
+          const newPhotos: VirtualTourPhoto[] = assets.map(a => ({
+            url:       a.url,
+            name:      a.name,
+            public_id: a.public_id,
+          }));
+          const updated = [...virtualTourPhotos, ...newPhotos];
+          setVirtualTourPhotos(updated);
+          await savePhotosToStrapi(updated);
+        }}
+      />
+    </div>
+  );
+}

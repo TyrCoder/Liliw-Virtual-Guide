@@ -1,0 +1,38 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { supabaseServer, explainDbError } from '@/lib/supabase-server';
+import { getCmsIdentity, CMS_TABLES } from '@/lib/cms-auth';
+import { logCmsAction } from '@/lib/cms-audit';
+
+type Params = { params: Promise<{ type: string; id: string }> };
+
+export async function POST(req: NextRequest, { params }: Params) {
+  const { type, id } = await params;
+  const table = CMS_TABLES[type];
+  if (!table) return NextResponse.json({ error: 'Invalid content type' }, { status: 400 });
+
+  const { role, email } = await getCmsIdentity(req);
+  if (!role) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (role === 'officer') return NextResponse.json({ error: 'Officers cannot submit content for approval' }, { status: 403 });
+
+  // Asking for name, title and question together requested columns two thirds
+  // of these tables do not have — attractions have name, news has title, FAQs
+  // have question, none has all three — so the query errored, `existing` came
+  // back null, and every entry reported itself as Not found. Take the row and
+  // read whichever label it turns out to carry.
+  const { data: existing } = await supabaseServer.from(table).select('*').eq('id', id).single();
+  if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  if (!['draft', 'rejected'].includes(existing.status)) {
+    return NextResponse.json({ error: 'Only draft or rejected entries can be submitted' }, { status: 409 });
+  }
+
+  const { error } = await supabaseServer
+    .from(table)
+    .update({ status: 'pending', reject_remarks: null })
+    .eq('id', id);
+
+  if (error) return NextResponse.json({ error: explainDbError(error) }, { status: 500 });
+
+  const entryTitle = existing.name || existing.title || existing.question || id;
+  logCmsAction({ table, entryId: id, entryTitle: String(entryTitle), event: 'entry.submit', performedBy: email, role });
+  return NextResponse.json({ success: true });
+}

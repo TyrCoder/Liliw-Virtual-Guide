@@ -1,0 +1,751 @@
+'use client';
+
+import { useEffect, useState, ReactNode } from 'react';
+import { Loader2, Plus, Edit2, Trash2, Send, CheckCircle, AlertCircle, X, Archive, RotateCcw, Search } from 'lucide-react';
+import StatusBadge from './StatusBadge';
+import RichTextEditor from './RichTextEditor';
+import MediaUploader, { MediaItem } from './MediaUploader';
+import AudioUploader from './AudioUploader';
+import { useAutoSaveDraft } from '@/hooks/useAutoSaveDraft';
+import RejectModal from './RejectModal';
+import ConfirmDialog, { IrreversibleNote } from './ConfirmDialog';
+import DateTimePicker from './DateTimePicker';
+import MultiSelectField from './MultiSelectField';
+
+// One template for every CMS content type.
+//
+// Each content tab was previously its own ~250-line file that differed only in
+// field names, table columns and the API slug — the list/filter/draft-autosave/
+// submit/approve/reject/delete logic and all the markup were copy-pasted. This
+// component owns that shared behaviour once; a tab is now just a config object.
+// The slug must match a key in CMS_TABLES (src/lib/cms-auth.ts), which is what
+// the API routes use to resolve the backing table.
+
+const STATUS_LABELS: Record<string, string> = {
+  all: 'All', draft: 'Draft', pending: 'Pending Review', approved: 'Published',
+  rejected: 'Rejected', archived: 'Archived',
+};
+
+export type CmsFieldType =
+  | 'text' | 'textarea' | 'number' | 'select' | 'richtext' | 'media'
+  | 'datetime' | 'checkbox' | 'audio' | 'multicheckbox';
+
+export interface CmsField {
+  /**
+   * Column name. May be dotted to reach inside a JSON column — artisans keep
+   * their links in `social_media`, so 'social_media.facebook' edits that key
+   * without disturbing the others alongside it.
+   */
+  name: string;
+  label: string;
+  type: CmsFieldType;
+  /** Blocks Save until filled. Also drives the `*` in the label. */
+  required?: boolean;
+  /** `select` and `multicheckbox` only. */
+  options?: { value: string; label: string }[];
+  /** `multicheckbox` only — wording for the tick that reveals the dropdown. Falls back to `label`. */
+  toggleLabel?: string;
+  placeholder?: string;
+  /** Guidance shown under the control, for things a label cannot carry. */
+  hint?: string;
+  /** `textarea` only. */
+  rows?: number;
+  /** `media` only — a cover image wants exactly one. */
+  maxFiles?: number;
+  /** Full-width (2) or half-width (1) within the form's two-column grid. */
+  colSpan?: 1 | 2;
+}
+
+/** Reads a possibly-dotted field name off the record being edited. */
+const readField = (obj: unknown, path: string): unknown =>
+  path.split('.').reduce<unknown>(
+    (acc, k) => (acc && typeof acc === 'object' ? (acc as Record<string, unknown>)[k] : undefined),
+    obj,
+  );
+
+/** Writes a possibly-dotted field name, cloning each level on the way down. */
+function writeField<T extends object>(obj: T, path: string, value: unknown): T {
+  const [head, ...rest] = path.split('.');
+  if (!rest.length) return { ...obj, [head]: value };
+  const child = (obj as Record<string, unknown>)[head];
+  return {
+    ...obj,
+    [head]: writeField((child && typeof child === 'object' ? child : {}) as object, rest.join('.'), value),
+  };
+}
+
+export interface CmsColumn<T> {
+  header: string;
+  render: (entry: T) => ReactNode;
+  /** The name column — rejection remarks are shown beneath it. */
+  primary?: boolean;
+}
+
+/**
+ * The Status column. Include it in `columns` wherever the tab wants it —
+ * tabs differ on whether Status sits before or after their own columns.
+ */
+export const statusColumn = <T extends { status: string }>(): CmsColumn<T> => ({
+  header: 'Status',
+  render: e => <StatusBadge status={e.status} />,
+});
+
+export interface CmsTabConfig<T> {
+  /** API slug, e.g. 'faqs' → /api/cms/faqs. Must match a CMS_TABLES key. */
+  slug: string;
+  /** Plural heading, e.g. 'FAQs'. */
+  title: string;
+  subtitle: string;
+  /** Singular, used in buttons/modal titles/confirms, e.g. 'FAQ'. */
+  entityLabel: string;
+  emptyIcon: ReactNode;
+  emptyText: string;
+  /** Blank record used when creating. */
+  empty: Record<string, unknown>;
+  fields: CmsField[];
+  columns: CmsColumn<T>[];
+}
+
+interface BaseEntry {
+  id: string;
+  status: string;
+  reject_remarks: string | null;
+  created_at: string;
+  media?: MediaItem[];
+}
+
+interface Props<T> {
+  config: CmsTabConfig<T>;
+  token: string | null;
+  userEmail: string;
+  isOfficer: boolean;
+  isAdmin: boolean;
+}
+
+export default function CmsTab<T extends BaseEntry>({ config, token, userEmail, isOfficer, isAdmin }: Props<T>) {
+  const { slug, fields, columns } = config;
+  const hasMedia = fields.some(f => f.type === 'media');
+
+  const [entries, setEntries]   = useState<T[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [editing, setEditing]   = useState<Partial<T> | null>(null);
+  const [media, setMedia]       = useState<MediaItem[]>([]);
+  // Whether `media` reflects what the entry actually has. A save sends the
+  // array as the entry's whole set of images, so sending one the form never
+  // loaded deletes them all — it must stay silent until it knows.
+  const [mediaKnown, setMediaKnown] = useState(false);
+  const [saving, setSaving]     = useState(false);
+  const [msg, setMsg]           = useState<{ ok: boolean; text: string } | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  // Ids ticked for a batch action.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [batchRunning, setBatchRunning] = useState(false);
+  // Which destructive action the confirm dialog is currently asking about.
+  const [confirmAction, setConfirmAction] =
+    useState<{ kind: 'archive' | 'restore' | 'purge' | 'submit'; entry: T } | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<string | null>(null);
+  const [rejectRemarks, setRejectRemarks] = useState('');
+  const [rejecting, setRejecting] = useState(false);
+
+  const h: Record<string, string> = { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+  const withMedia = (body: Record<string, unknown>) =>
+    (hasMedia && mediaKnown ? { ...body, media } : body);
+
+  const autoSaveStatus = useAutoSaveDraft(
+    editing?.id,
+    JSON.stringify(hasMedia ? { editing, media } : editing),
+    async () => {
+      if (!editing?.id) return;
+      await fetch(`/api/cms/${slug}/${editing.id}`, {
+        method: 'PUT', headers: h, body: JSON.stringify(withMedia({ ...editing, created_by: userEmail })),
+      });
+    },
+    // Never auto-save something live or awaiting review: the PUT resets status
+    // to draft, which would quietly pull it off the public site.
+    (editing as { status?: string } | null)?.status !== 'approved'
+      && (editing as { status?: string } | null)?.status !== 'pending',
+  );
+
+  const load = async (status?: string) => {
+    setLoading(true);
+    const qs = status && status !== 'all' ? `?status=${status}` : '';
+    const res = await fetch(`/api/cms/${slug}${qs}`, { headers: h }).catch(() => null);
+    const d = res ? await res.json() : {};
+    if (res && !res.ok) setMsg({ ok: false, text: d.error || `Could not load (${res.status}).` });
+    setEntries(d.data || []);
+    setLoading(false);
+  };
+
+  /**
+   * Approve, submit, reject and delete were fire-and-forget: the response was
+   * dropped and the list reloaded regardless. A 403 (an editor pressing
+   * Approve) or a 409 (approving something not pending, deleting something
+   * under review) therefore looked exactly like a button that does nothing.
+   */
+  const act = async (url: string, init: RequestInit, failure: string) => {
+    const res = await fetch(url, init).catch(() => null);
+    if (!res) { setMsg({ ok: false, text: `${failure}: no response from the server.` }); return false; }
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      setMsg({ ok: false, text: d.error || `${failure} (${res.status}).` });
+      return false;
+    }
+    return true;
+  };
+
+  // `load` is recreated every render; depending on it would refetch in a loop.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(statusFilter); setSelected(new Set()); }, [statusFilter]);
+
+  const openCreate = () => {
+    setEditing({ ...config.empty } as Partial<T>); setMedia([]); setMediaKnown(true); setMsg(null);
+  };
+  const openEdit = (e: T) => {
+    setEditing({ ...e }); setMedia(e.media ?? []); setMediaKnown(Array.isArray(e.media)); setMsg(null);
+  };
+  const closeForm = () => { setEditing(null); setMsg(null); };
+
+  const save = async () => {
+    if (!editing) return;
+    setSaving(true); setMsg(null);
+    const isNew = !editing.id;
+    const url = isNew ? `/api/cms/${slug}` : `/api/cms/${slug}/${editing.id}`;
+    const res = await fetch(url, {
+      method: isNew ? 'POST' : 'PUT', headers: h,
+      body: JSON.stringify(withMedia({ ...editing, created_by: userEmail })),
+    });
+    const d = await res.json();
+    if (res.ok) {
+      setMsg({ ok: true, text: isNew ? `${config.entityLabel} created.` : `${config.entityLabel} saved.` });
+      load(statusFilter);
+      setTimeout(closeForm, 1200);
+    } else {
+      setMsg({ ok: false, text: d.error || 'Save failed' });
+    }
+    setSaving(false);
+  };
+
+  const approve = async (id: string) => {
+    setMsg(null);
+    if (await act(`/api/cms/${slug}/${id}/approve`, { method: 'POST', headers: h }, 'Could not approve')) {
+      setMsg({ ok: true, text: 'Published — it is now live on the site.' });
+    }
+    load(statusFilter);
+  };
+
+  const reject = (id: string) => { setRejectTarget(id); setRejectRemarks(''); };
+
+  // Every selected id in one request; the server applies the action to the
+  // eligible ones and skips the rest.
+  const runBulk = async (action: 'submit' | 'approve' | 'reject', remarks?: string) => {
+    setBatchRunning(true); setMsg(null);
+    const res = await fetch(`/api/cms/${slug}/bulk`, {
+      method: 'POST', headers: h,
+      body: JSON.stringify({ action, ids: [...selected], remarks }),
+    }).catch(() => null);
+    const d = res ? await res.json() : {};
+    if (res && res.ok) {
+      const verb = action === 'submit' ? 'Sent for review' : action === 'approve' ? 'Published' : 'Sent back to the author';
+      setMsg({ ok: true, text: `${verb}: ${d.count}${d.skipped ? ` · ${d.skipped} skipped` : ''}.` });
+      setSelected(new Set());
+    } else {
+      setMsg({ ok: false, text: d.error || 'Batch action failed.' });
+    }
+    setBatchRunning(false);
+    load(statusFilter);
+  };
+
+  const confirmReject = async () => {
+    if (!rejectTarget || !rejectRemarks.trim()) return;
+    if (rejectTarget === '__batch__') {
+      setRejecting(true);
+      await runBulk('reject', rejectRemarks.trim());
+      setRejecting(false); setRejectTarget(null); setRejectRemarks('');
+      return;
+    }
+    setRejecting(true); setMsg(null);
+    const ok = await act(
+      `/api/cms/${slug}/${rejectTarget}/reject`,
+      { method: 'POST', headers: h, body: JSON.stringify({ remarks: rejectRemarks }) },
+      'Could not reject',
+    );
+    if (ok) setMsg({ ok: true, text: 'Sent back to the author.' });
+    setRejecting(false); setRejectTarget(null); setRejectRemarks('');
+    load(statusFilter);
+  };
+
+  const batchSubmit  = () => runBulk('submit');
+  const batchApprove = () => runBulk('approve');
+  const batchDecline = () => { setRejectTarget('__batch__'); setRejectRemarks(''); };
+
+  /** Submit, archive, restore, or destroy — whichever the open dialog asked for. */
+  const runConfirmed = async () => {
+    if (!confirmAction) return;
+    const { kind, entry } = confirmAction;
+    const label = String(
+      (entry as Record<string, unknown>).name
+      ?? (entry as Record<string, unknown>).title
+      ?? (entry as Record<string, unknown>).question
+      ?? config.entityLabel,
+    );
+
+    setDeleting(entry.id);
+    setMsg(null);
+
+    let ok = false;
+    if (kind === 'submit') {
+      ok = await act(`/api/cms/${slug}/${entry.id}/submit`, { method: 'POST', headers: h }, 'Could not submit for review');
+      if (ok) setMsg({ ok: true, text: `"${label}" sent for review.` });
+    } else if (kind === 'archive') {
+      ok = await act(`/api/cms/${slug}/${entry.id}`, { method: 'DELETE', headers: h }, 'Could not archive');
+      if (ok) setMsg({ ok: true, text: `"${label}" archived. It is off the site and can be restored.` });
+    } else if (kind === 'restore') {
+      ok = await act(`/api/cms/${slug}/${entry.id}/restore`, { method: 'POST', headers: h }, 'Could not restore');
+      if (ok) setMsg({ ok: true, text: `"${label}" restored as a draft. Submit it for review to publish again.` });
+    } else {
+      ok = await act(`/api/cms/${slug}/${entry.id}?permanent=1`, { method: 'DELETE', headers: h }, 'Could not delete');
+      if (ok) setMsg({ ok: true, text: `"${label}" deleted permanently.` });
+    }
+
+    setDeleting(null);
+    setConfirmAction(null);
+    load(statusFilter);
+  };
+
+  const canEdit = !isOfficer || isAdmin;
+
+  const setField = (name: string, value: unknown) =>
+    setEditing(p => writeField((p ?? {}) as object, name, value) as Partial<T>);
+
+  const val = (name: string) => (editing ? readField(editing, name) : undefined);
+
+  // Save is blocked until every required field has a non-empty value.
+  const missingRequired = fields.some(f => {
+    if (!f.required) return false;
+    const v = val(f.name);
+    return typeof v === 'string' ? !v.trim() : v === undefined || v === null;
+  });
+
+  const inputCls = 'w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300';
+
+  const renderField = (f: CmsField) => {
+    switch (f.type) {
+      case 'textarea':
+        return <textarea rows={f.rows ?? 3} value={(val(f.name) as string) || ''} placeholder={f.placeholder}
+          onChange={e => setField(f.name, e.target.value)} className={`${inputCls} resize-none`} />;
+      case 'number':
+        // type="number" still admits 'e', '+' and a second '.', and hands back
+        // an empty string for them — so a latitude typed with a stray letter
+        // silently became null rather than being refused. Blocked at the key,
+        // and the server checks the range as well.
+        return <input type="number" inputMode="decimal" step="any"
+          value={(val(f.name) as number) ?? ''} placeholder={f.placeholder}
+          onKeyDown={e => { if (['e', 'E', '+'].includes(e.key)) e.preventDefault(); }}
+          onChange={e => setField(f.name, e.target.value === '' ? null : Number(e.target.value))} className={inputCls} />;
+      case 'select':
+        // Fall back to the first option so a record with an empty value still
+        // shows something valid rather than a blank select.
+        return (
+          <select value={(val(f.name) as string) || f.options?.[0]?.value || ''}
+            onChange={e => setField(f.name, e.target.value)}
+            className={`${inputCls} bg-white`}>
+            {(f.options ?? []).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        );
+      case 'richtext':
+        return <RichTextEditor value={(val(f.name) as string) || ''} onChange={v => setField(f.name, v)} placeholder={f.placeholder} />;
+      case 'datetime':
+        // The column stores a full ISO timestamp; the picker wants it trimmed
+        // to the minute, and gives it back without a zone — the same contract
+        // the native datetime-local input had before it was replaced.
+        return <DateTimePicker
+          value={((val(f.name) as string) || '').slice(0, 16) || null}
+          onChange={v => setField(f.name, v)}
+          placeholder={f.placeholder} />;
+      case 'checkbox':
+        return (
+          <label className="flex items-center gap-2.5 cursor-pointer select-none py-1">
+            <input type="checkbox" className="w-4 h-4 rounded accent-blue-600"
+              checked={!!val(f.name)}
+              onChange={e => setField(f.name, e.target.checked)} />
+            <span className="text-sm text-gray-700 font-medium">{f.label}</span>
+          </label>
+        );
+      case 'multicheckbox':
+        // An entry can belong to more than one of these at once — a category,
+        // most often — stored as a plain string array rather than reusing
+        // `select`'s single value, which had no way to say "both".
+        return (
+          <MultiSelectField
+            value={(val(f.name) as string[] | null) ?? []}
+            options={f.options ?? []}
+            onChange={v => setField(f.name, v)}
+            toggleLabel={f.toggleLabel ?? f.label}
+            placeholder={f.placeholder} />
+        );
+      case 'media':
+        return <MediaUploader value={media}
+          onChange={items => { setMedia(items); setMediaKnown(true); }}
+          maxFiles={f.maxFiles} />;
+
+      /* Audio is a single URL on the row rather than a row in cms_media.
+         The gallery table is built for many files with an order and alt text;
+         a narration is one file per language, and giving it the same shape
+         would mean asking which of them is the recording every time. */
+      case 'audio':
+        return (
+          <AudioUploader
+            value={(val(f.name) as string) || ''}
+            onChange={url => setField(f.name, url)}
+            label={f.label.toLowerCase()}
+          />
+        );
+      default:
+        return <input value={(val(f.name) as string) || ''} placeholder={f.placeholder}
+          onChange={e => setField(f.name, e.target.value)} className={inputCls} />;
+    }
+  };
+
+  // Client-side text filter over the loaded (status-filtered) rows, matching
+  // any string field — name/title, category, author, slug, and so on.
+  const q = search.trim().toLowerCase();
+  const filteredEntries = q
+    ? entries.filter(e => Object.values(e as Record<string, unknown>)
+        .some(v => typeof v === 'string' && v.toLowerCase().includes(q)))
+    : entries;
+
+  // Batch selection, scoped to the rows currently shown.
+  const toggleOne = (id: string) =>
+    setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const allShownSelected = filteredEntries.length > 0 && filteredEntries.every(e => selected.has(e.id));
+  const toggleAll = () =>
+    setSelected(allShownSelected ? new Set() : new Set(filteredEntries.map(e => e.id)));
+
+  const selectedShown  = filteredEntries.filter(e => selected.has(e.id));
+  const submittableCount = canEdit ? selectedShown.filter(e => ['draft', 'rejected'].includes(e.status)).length : 0;
+  const approvableCount  = (isOfficer || isAdmin) ? selectedShown.filter(e => e.status === 'pending').length : 0;
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-base font-bold text-gray-900">{config.title}</h2>
+          <p className="text-xs text-gray-400 mt-0.5">{config.subtitle}</p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {['all', 'draft', 'pending', 'approved', 'rejected', ...(isOfficer || isAdmin ? ['archived'] : [])].map(s => (
+            <button key={s} onClick={() => setStatusFilter(s)}
+              className={`px-3 py-1 rounded-lg text-xs font-semibold transition ${statusFilter === s ? 'text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+              style={statusFilter === s ? { backgroundColor: '#1565C0' } : {}}>
+              {STATUS_LABELS[s]}
+            </button>
+          ))}
+          {canEdit && (
+            <button onClick={openCreate}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold text-white transition"
+              style={{ backgroundColor: '#1565C0' }}>
+              <Plus className="w-4 h-4" /> New {config.entityLabel}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Result of a list action. The only place `msg` used to render was the
+          edit form footer, so anything reported by approve, submit, reject or
+          delete — which all run from this list, with no form open — was set
+          and then never shown. */}
+      {editing === null && msg && (
+        <div className={`flex items-start gap-2 px-4 py-3 rounded-xl border text-sm font-medium ${
+          msg.ok ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-600'
+        }`}>
+          {msg.ok ? <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" /> : <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />}
+          <span className="flex-1 min-w-0">{msg.text}</span>
+          <button onClick={() => setMsg(null)} className="shrink-0 opacity-60 hover:opacity-100">✕</button>
+        </div>
+      )}
+
+      {/* Search */}
+      <div className="relative">
+        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder={`Search ${config.title.toLowerCase()} by name…`}
+          className="w-full pl-9 pr-9 py-2.5 rounded-xl border border-gray-200 bg-white text-sm focus:outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+        />
+        {search && (
+          <button onClick={() => setSearch('')} aria-label="Clear search"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+            <X className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+
+      {/* Batch action bar — appears once rows are ticked. */}
+      {selected.size > 0 && (
+        <div className="flex items-center gap-3 flex-wrap px-4 py-3 rounded-xl border" style={{ backgroundColor: 'rgba(21,101,192,0.06)', borderColor: 'rgba(21,101,192,0.25)' }}>
+          <span className="text-sm font-bold" style={{ color: '#1565C0' }}>{selected.size} selected</span>
+          <div className="flex items-center gap-2 ml-auto">
+            {submittableCount > 0 && (
+              <button onClick={batchSubmit} disabled={batchRunning}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-yellow-300 text-yellow-800 bg-white hover:bg-yellow-50 transition disabled:opacity-50">
+                {batchRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />} Submit ({submittableCount})
+              </button>
+            )}
+            {approvableCount > 0 && (
+              <>
+                <button onClick={batchApprove} disabled={batchRunning}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-green-300 text-green-700 bg-white hover:bg-green-50 transition disabled:opacity-50">
+                  {batchRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle className="w-3.5 h-3.5" />} Approve ({approvableCount})
+                </button>
+                <button onClick={batchDecline} disabled={batchRunning}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-red-300 text-red-600 bg-white hover:bg-red-50 transition disabled:opacity-50">
+                  <AlertCircle className="w-3.5 h-3.5" /> Decline ({approvableCount})
+                </button>
+              </>
+            )}
+            <button onClick={() => setSelected(new Set())}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-500 hover:bg-gray-100 transition">
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* List */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        {loading ? (
+          <div className="flex items-center justify-center py-16"><Loader2 className="w-6 h-6 animate-spin" style={{ color: '#1565C0' }} /></div>
+        ) : filteredEntries.length === 0 ? (
+          <div className="flex flex-col items-center py-16 text-gray-400">
+            {config.emptyIcon}
+            <p className="font-semibold text-sm">
+              {q ? `No ${config.entityLabel.toLowerCase()}s match “${search.trim()}”.` : config.emptyText}
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="bg-gray-50 text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                <th className="pl-5 pr-2 py-3 w-8">
+                  <input type="checkbox" aria-label="Select all" checked={allShownSelected}
+                    onChange={toggleAll} className="w-4 h-4 rounded border-gray-300 cursor-pointer accent-blue-600" />
+                </th>
+                {columns.map(c => <th key={c.header} className="px-5 py-3 text-left">{c.header}</th>)}
+                <th className="px-5 py-3 text-left">Actions</th>
+              </tr></thead>
+              <tbody className="divide-y divide-gray-50">
+                {filteredEntries.map(e => (
+                  <tr key={e.id} className={`transition-colors ${selected.has(e.id) ? 'bg-blue-50/60' : 'hover:bg-gray-50'}`}>
+                    <td className="pl-5 pr-2 py-4">
+                      <input type="checkbox" aria-label={`Select ${e.id}`} checked={selected.has(e.id)}
+                        onChange={() => toggleOne(e.id)} className="w-4 h-4 rounded border-gray-300 cursor-pointer accent-blue-600" />
+                    </td>
+                    {columns.map(c => (
+                      <td key={c.header} className="px-5 py-4">
+                        {c.render(e)}
+                        {c.primary && e.reject_remarks && (
+                          <p className="text-xs text-red-500 mt-0.5">Rejected: {e.reject_remarks}</p>
+                        )}
+                      </td>
+                    ))}
+                    <td className="px-5 py-4">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {canEdit && ['draft', 'rejected', 'approved'].includes(e.status) && (
+                          <button onClick={() => openEdit(e)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border border-gray-200 text-gray-600 hover:border-blue-300 hover:text-blue-600 transition">
+                            <Edit2 className="w-3 h-3" /> Edit
+                          </button>
+                        )}
+                        {canEdit && ['draft', 'rejected'].includes(e.status) && (
+                          <button onClick={() => setConfirmAction({ kind: 'submit', entry: e })} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border border-yellow-200 text-yellow-700 hover:bg-yellow-50 transition">
+                            <Send className="w-3 h-3" /> Submit
+                          </button>
+                        )}
+                        {(isOfficer || isAdmin) && e.status === 'pending' && (
+                          <>
+                            <button onClick={() => approve(e.id)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border border-green-200 text-green-700 hover:bg-green-50 transition">
+                              <CheckCircle className="w-3 h-3" /> Approve
+                            </button>
+                            <button onClick={() => reject(e.id)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border border-red-200 text-red-600 hover:bg-red-50 transition">
+                              <AlertCircle className="w-3 h-3" /> Reject
+                            </button>
+                          </>
+                        )}
+                        {canEdit && ['draft', 'rejected', 'approved'].includes(e.status) && (
+                          <button onClick={() => setConfirmAction({ kind: 'archive', entry: e })}
+                            disabled={deleting === e.id} title="Archive"
+                            className="p-1 rounded-lg text-gray-300 hover:text-amber-600 transition disabled:opacity-50">
+                            {deleting === e.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Archive className="w-3.5 h-3.5" />}
+                          </button>
+                        )}
+
+                        {/* The archive belongs to admins and officers, and so
+                            do the only two things you can do from it. */}
+                        {(isOfficer || isAdmin) && e.status === 'archived' && (
+                          <>
+                            <button onClick={() => setConfirmAction({ kind: 'restore', entry: e })}
+                              disabled={deleting === e.id}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border border-blue-200 text-blue-700 hover:bg-blue-50 transition disabled:opacity-50">
+                              <RotateCcw className="w-3 h-3" /> Restore
+                            </button>
+                            <button onClick={() => setConfirmAction({ kind: 'purge', entry: e })}
+                              disabled={deleting === e.id} title="Delete permanently"
+                              className="p-1 rounded-lg text-gray-300 hover:text-red-500 transition disabled:opacity-50">
+                              {deleting === e.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Form modal */}
+      {editing !== null && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 py-8 px-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <h3 className="font-bold text-gray-900">{editing.id ? `Edit ${config.entityLabel}` : `New ${config.entityLabel}`}</h3>
+              <button onClick={closeForm} className="p-1 rounded-lg text-gray-400 hover:text-gray-600 transition"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="px-6 py-5 max-h-[70vh] overflow-y-auto">
+              {/* Single column on phones — half-width fields like lat/lng were
+                  ~140px wide side by side on a narrow screen. */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {fields.map(f => (
+                  <div key={f.name} className={(f.colSpan ?? 2) === 2 ? 'sm:col-span-2' : ''}>
+                    {/* A checkbox reads better with its label beside it, and
+                        renders its own, so it skips the heading above. */}
+                    {f.type !== 'checkbox' && (
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">
+                        {f.label}{f.required ? ' *' : ''}
+                      </label>
+                    )}
+                    {renderField(f)}
+                    {/* Under the control rather than in the placeholder, which
+                        vanishes the moment anything is typed — exactly when a
+                        note about what the field is for still matters. */}
+                    {f.hint && (
+                      <p className="text-[11px] text-gray-400 mt-1.5 leading-relaxed">{f.hint}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                {msg && (
+                  <span className={`flex items-center gap-1.5 text-sm font-medium ${msg.ok ? 'text-green-600' : 'text-red-500'}`}>
+                    {msg.ok ? <CheckCircle className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />} {msg.text}
+                  </span>
+                )}
+                {autoSaveStatus === 'saving' && <span className="flex items-center gap-1 text-xs text-gray-400"><Loader2 className="w-3 h-3 animate-spin" /> Saving draft…</span>}
+                {autoSaveStatus === 'saved'  && <span className="flex items-center gap-1 text-xs text-green-500"><CheckCircle className="w-3 h-3" /> Draft saved</span>}
+              </div>
+              <div className="flex items-center gap-2 ml-auto">
+                <button onClick={closeForm} className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-500 hover:bg-gray-100 transition">Cancel</button>
+                <button onClick={save} disabled={saving || missingRequired}
+                  className="inline-flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-semibold text-white transition disabled:opacity-60"
+                  style={{ backgroundColor: '#1565C0' }}>
+                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Save Draft
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <RejectModal
+        open={rejectTarget !== null}
+        remarks={rejectRemarks}
+        onChangeRemarks={setRejectRemarks}
+        onConfirm={confirmReject}
+        onCancel={() => { setRejectTarget(null); setRejectRemarks(''); }}
+        loading={rejecting}
+      />
+
+      {(() => {
+        if (!confirmAction) return null;
+        const { kind, entry } = confirmAction;
+        const label = String(
+          (entry as Record<string, unknown>).name
+          ?? (entry as Record<string, unknown>).title
+          ?? (entry as Record<string, unknown>).question
+          ?? 'this entry',
+        );
+        const noun = config.entityLabel.toLowerCase();
+
+        const copy = {
+          submit: {
+            tone: 'neutral' as const,
+            title: `Submit this ${noun} for review?`,
+            confirmLabel: 'Submit for review',
+            message: (
+              <>
+                <strong className="text-gray-700">{label}</strong> goes to an officer to
+                approve or send back. You will not be able to keep editing it while it is
+                waiting for review.
+              </>
+            ),
+          },
+          archive: {
+            tone: 'warning' as const,
+            title: `Archive this ${noun}?`,
+            confirmLabel: 'Archive',
+            message: (
+              <>
+                <strong className="text-gray-700">{label}</strong> will be taken off the
+                public site and moved to the archive. Its photos are kept, and an admin
+                or officer can restore it later.
+              </>
+            ),
+          },
+          restore: {
+            tone: 'neutral' as const,
+            title: `Restore this ${noun}?`,
+            confirmLabel: 'Restore',
+            message: (
+              <>
+                <strong className="text-gray-700">{label}</strong> comes back as a draft,
+                not straight to the site — submit it for review when it is ready.
+              </>
+            ),
+          },
+          purge: {
+            tone: 'danger' as const,
+            title: `Delete this ${noun} permanently?`,
+            confirmLabel: 'Delete permanently',
+            message: (
+              <>
+                <strong className="text-gray-700">{label}</strong> and its photos will be
+                removed from the database.
+                <IrreversibleNote>This cannot be undone.</IrreversibleNote>
+              </>
+            ),
+          },
+        }[kind];
+
+        return (
+          <ConfirmDialog
+            open
+            tone={copy.tone}
+            title={copy.title}
+            message={copy.message}
+            confirmLabel={copy.confirmLabel}
+            loading={deleting === entry.id}
+            onConfirm={runConfirmed}
+            onCancel={() => setConfirmAction(null)}
+          />
+        );
+      })()}
+    </div>
+  );
+}

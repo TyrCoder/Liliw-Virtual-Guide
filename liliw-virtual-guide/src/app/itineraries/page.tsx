@@ -1,0 +1,2704 @@
+'use client';
+
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import Link from 'next/link';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  ChevronLeft, ChevronRight, ChevronUp, Clock, Users, X, MapPin, Star,
+  CheckCircle, XCircle, Navigation, ArrowRight, Calendar,
+  Lightbulb, Sparkles, RotateCcw, Wallet, Heart, Sun, BookmarkCheck,
+  Trash2, ChevronDown, LogIn, Pencil, Plus, ExternalLink, Check, GripVertical,
+  Share2, Link2,
+} from 'lucide-react';
+import AuthModal from '@/components/AuthModal';
+import { useFavorites } from '@/context/FavoritesContext';
+import { useAuth } from '@/context/AuthContext';
+import { stripHtml } from '@/lib/text';
+import SafeHtml from '@/components/SafeHtml';
+import PageBanner from '@/components/liliw/PageBanner';
+import { distanceMeters } from '@/lib/geo';
+import ItineraryMap, { useMappedStops } from '@/components/ItineraryMap';
+import ItineraryShareCard from '@/components/ItineraryShareCard';
+import ItineraryChecklist from '@/components/ItineraryChecklist';
+
+const HL = 'var(--font-heading), Outfit, sans-serif';
+const DL = 'var(--font-display), "Cormorant Garamond", Georgia, serif';
+const BL = 'var(--font-body), "Plus Jakarta Sans", sans-serif';
+
+const PENNANT = ['#EF4444','#F97316','#EAB308','#22C55E','#0D9488','#3B82F6','#8B5CF6'];
+function Bunting({ flip = false }: { flip?: boolean }) {
+  const r = 14, panels = 8, arc = Math.PI * 2 / panels, spacing = 30;
+  const W = r + (PENNANT.length - 1) * spacing + r;
+  const cy = r;
+  return (
+    <svg width={W} height={r * 2} viewBox={`0 0 ${W} ${r * 2}`} className="hidden sm:inline-block" style={{ transform: flip ? 'scaleX(-1)' : undefined, verticalAlign:'middle' }}>
+      <line x1="0" y1={cy} x2={W} y2={cy} stroke="#9CA3AF" strokeWidth="1.2" />
+      {PENNANT.map((color, idx) => {
+        const cx = r + idx * spacing;
+        return (
+          <g key={idx}>
+            {Array.from({ length: panels }).map((_, i) => {
+              const a1 = -Math.PI / 2 + i * arc;
+              const a2 = -Math.PI / 2 + (i + 1) * arc;
+              const x1 = (cx + r * Math.cos(a1)).toFixed(2);
+              const y1 = (cy + r * Math.sin(a1)).toFixed(2);
+              const x2 = (cx + r * Math.cos(a2)).toFixed(2);
+              const y2 = (cy + r * Math.sin(a2)).toFixed(2);
+              return <path key={i} d={`M ${cx},${cy} L ${x1},${y1} A ${r},${r} 0 0,1 ${x2},${y2} Z`}
+                fill={i % 2 === 0 ? color : color + 'bb'} />;
+            })}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/* â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€ shared helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€ */
+
+function getPhotoUrl(p: any): string | null {
+  if (!p) return null;
+  const raw = p.url || p.data?.attributes?.url || p.attributes?.url || null;
+  if (!raw || raw.startsWith('/')) return null;
+  return raw;
+}
+
+function blocksToText(blocks: any): string {
+  if (!Array.isArray(blocks)) return '';
+  return blocks
+    .flatMap((b: any) => Array.isArray(b.children) ? b.children.map((c: any) => c.text || '') : [])
+    .join(' ').trim();
+}
+
+/* ══════════════════════════════════════════════════════════
+   PART 1 â€" AI ITINERARY BUILDER WIZARD
+   ══════════════════════════════════════════════════════════ */
+
+const DURATIONS = [
+  { value: 'half-day', label: 'Half Day',  sub: '4 hours' },
+  { value: 'full-day', label: 'Full Day',  sub: '8 hours' },
+  { value: '2 days',   label: '2 Days',    sub: 'Weekend' },
+  { value: '3 days',   label: '3 Days',    sub: 'Extended' },
+  { value: 'custom',   label: 'Custom',    sub: 'Set your own' },
+];
+
+const BUDGETS = [
+  { value: 'budget-friendly (under ₱1,000/day)', label: 'Budget',    sub: 'Under ₱1,000/day' },
+  { value: 'mid-range (₱1,000–₱3,000/day)',      label: 'Mid-range', sub: '₱1,000 – ₱3,000/day' },
+  { value: 'premium (₱3,000+/day)',               label: 'Premium',   sub: '₱3,000+/day' },
+  { value: 'custom',                              label: 'Custom',    sub: 'Set your own' },
+];
+
+const GROUP_SIZES = [
+  { value: 'solo (1 traveler)',        label: 'Solo',    sub: 'Just me' },
+  { value: 'couple (2 travelers)',     label: 'Couple',  sub: '2 travelers' },
+  { value: 'family (3–5 travelers)',   label: 'Family',  sub: '3 – 5 travelers' },
+  { value: 'group (6+ travelers)',     label: 'Group',   sub: '6 or more travelers' },
+  { value: 'custom',                   label: 'Custom',  sub: 'Set your own' },
+];
+
+const INTERESTS = [
+  { value: 'Heritage & History'   },
+  { value: 'Local Food & Cuisine' },
+  { value: 'Arts & Crafts'        },
+  { value: 'Nature & Outdoors'    },
+  { value: 'Family Activities'    },
+  { value: 'Photography'          },
+  { value: 'Shopping'             },
+  { value: 'Culture & Festivals'  },
+];
+
+interface Stop { time: string; place: string; activity: string; duration: string; tip: string; }
+interface Day  { day: number; theme: string; stops: Stop[]; }
+interface GeneratedPlan { title: string; summary: string; days: Day[]; tips: string[]; estimatedCostPerDay: string; }
+interface SavedTrip { id: string; savedAt: string; title: string; plan: GeneratedPlan; duration: string; budget: string; isPublic: boolean; }
+
+type ItineraryPlaceType = 'heritage' | 'spot' | 'dining' | 'footwear' | 'stay';
+
+const INTEREST_TO_TYPES: Record<string, ItineraryPlaceType[]> = {
+  'Heritage & History':   ['heritage'],
+  'Local Food & Cuisine': ['dining'],
+  'Arts & Crafts':        ['heritage', 'spot', 'footwear'],
+  'Nature & Outdoors':    ['spot'],
+  'Family Activities':    ['heritage', 'spot', 'dining'],
+  'Photography':          ['heritage', 'spot', 'dining'],
+  'Shopping':             ['footwear', 'spot', 'heritage'],
+  'Culture & Festivals':  ['heritage'],
+};
+
+function WizardCard({ value, label, sub, selected, onClick }: {
+  value: string; label: string; sub: string; selected: boolean; onClick: () => void;
+}) {
+  return (
+    <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={onClick}
+      className={`w-full flex items-center justify-between p-4 rounded-xl border text-left transition-all ${
+        selected ? 'border-blue-300 bg-blue-50' : 'border-gray-200 bg-white hover:border-gray-300'
+      }`}>
+      <div>
+        <p className={`font-semibold text-sm`} style={{ color: selected ? '#1565C0' : '#1A1A2E', fontFamily: HL }}>{label}</p>
+        <p className="text-xs text-gray-400 mt-0.5" style={{ fontFamily: BL }}>{sub}</p>
+      </div>
+      {selected && (
+        <div className="w-5 h-5 rounded-full flex items-center justify-center shrink-0"
+          style={{ backgroundColor: '#1565C0' }}>
+          <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+          </svg>
+        </div>
+      )}
+    </motion.button>
+  );
+}
+
+function InterestChip({ value, selected, onClick }: { value: string; selected: boolean; onClick: () => void }) {
+  return (
+    <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} onClick={onClick}
+      className={`px-4 py-2 rounded-full border text-sm font-medium transition-all`}
+      style={{
+        borderColor: selected ? '#1565C0' : '#E5E7EB',
+        backgroundColor: selected ? 'rgba(11,61,145,0.07)' : 'white',
+        color: selected ? '#1565C0' : '#4B5563',
+        fontFamily: BL,
+      }}>
+      {value}
+    </motion.button>
+  );
+}
+
+function AttractionQuickModal({ placeName, onClose }: { placeName: string; onClose: () => void }) {
+  const [attraction, setAttraction] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch('/api/content/attractions').then(r => r.json()).then(json => {
+      const all: any[] = json.data ?? [];
+      const needle = placeName.toLowerCase();
+      const found = all.find((a: any) => {
+        const name = (a.attributes?.name || '').toLowerCase();
+        return name === needle || name.includes(needle) || needle.includes(name);
+      });
+      setAttraction(found || null);
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, [placeName]);
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
+
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = ''; };
+  }, []);
+
+  const attr = attraction?.attributes;
+  const rawUrl = attr?.photos?.[0]?.url || null;
+  const photoUrl = rawUrl?.startsWith('http') ? rawUrl : null;
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-70 flex items-end sm:items-center justify-center">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <motion.div initial={{ y: 80, opacity: 0, scale: 0.97 }} animate={{ y: 0, opacity: 1, scale: 1 }}
+        exit={{ y: 80, opacity: 0 }} transition={{ type: 'spring', stiffness: 340, damping: 30 }}
+        className="relative z-10 bg-white w-full sm:max-w-md sm:rounded-3xl rounded-t-3xl overflow-hidden flex flex-col"
+        style={{ maxHeight: '80vh' }}>
+        <button onClick={onClose} className="absolute top-4 right-4 z-20 p-2 rounded-full bg-white/90 hover:bg-white shadow transition">
+          <X className="w-4 h-4 text-gray-700" />
+        </button>
+        {loading ? (
+          <div className="flex justify-center items-center py-16">
+            <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2" style={{ borderColor: '#F5C518' }} />
+          </div>
+        ) : !attraction ? (
+          <div className="p-8 text-center">
+            <MapPin className="w-12 h-12 mx-auto mb-3 opacity-20" style={{ color: '#1565C0' }} />
+            <h3 className="font-bold text-gray-700 mb-1" style={{ fontFamily: HL }}>{placeName}</h3>
+            <p className="text-sm text-gray-400" style={{ fontFamily: BL }}>No details found for this place.</p>
+          </div>
+        ) : (
+          <>
+            {photoUrl && (
+              <div className="relative shrink-0 h-44">
+                <img src={photoUrl} alt={attr.name} className="absolute inset-0 w-full h-full object-cover" />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+                <div className="absolute bottom-4 left-5 right-12">
+                  <h2 className="text-xl font-bold text-white" style={{ fontFamily: DL }}>{attr.name}</h2>
+                </div>
+              </div>
+            )}
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {!photoUrl && <h2 className="text-xl font-bold text-gray-900" style={{ fontFamily: DL }}>{attr.name}</h2>}
+              <div className="flex flex-wrap gap-2">
+                {!!attr.rating && (
+                  <span className="inline-flex items-center gap-1 text-xs font-semibold px-3 py-1 rounded-full border"
+                    style={{ backgroundColor: 'rgba(245,197,24,0.12)', color: '#1565C0', borderColor: 'rgba(245,197,24,0.3)', fontFamily: HL }}>
+                    <Star className="w-3 h-3 fill-current" style={{ color: '#F5C518' }} />{attr.rating}/5
+                  </span>
+                )}
+                {attr.location && (
+                  <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-600 text-xs font-semibold px-3 py-1 rounded-full"
+                    style={{ fontFamily: BL }}>
+                    <MapPin className="w-3 h-3" />{attr.location}
+                  </span>
+                )}
+              </div>
+              {attr.description && (
+                <p className="text-sm text-gray-600 leading-relaxed line-clamp-5" style={{ fontFamily: BL }}>{stripHtml(attr.description)}</p>
+              )}
+              <Link href={`/attractions/${attraction.id}`}
+                className="flex items-center justify-center gap-2 w-full py-3 rounded-2xl font-bold text-sm hover:opacity-90 transition"
+                style={{ backgroundColor: '#1565C0', color: '#F5C518', fontFamily: BL }}>
+                View Full Page <ExternalLink className="w-4 h-4" />
+              </Link>
+            </div>
+          </>
+        )}
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function PlanResult({ plan, onReset, onSave, saved, isLoggedIn, interests, duration, userLocation, locationStatus }: {
+  plan: GeneratedPlan; onReset: () => void; onSave: (editedPlan: GeneratedPlan) => void; saved: boolean; isLoggedIn: boolean; interests: string[];
+  duration: string;
+  userLocation: [number, number] | null; locationStatus: 'idle' | 'pending' | 'granted' | 'denied';
+}) {
+  // A plan missing its `days` array (or a day missing its own `stops`) used to
+  // crash this view outright — several places below call .map()/.flatMap()
+  // straight off localPlan.days with no guard. The generator route now always
+  // sends a real array, but a trip saved before that fix, or any other future
+  // path into this component, still could not — normalizing once here, at the
+  // one place localPlan is seeded, is what keeps every read of it below safe
+  // rather than repeating the same defensive check at each call site.
+  const [localPlan, setLocalPlan] = useState<GeneratedPlan>(() => {
+    const copy: GeneratedPlan = JSON.parse(JSON.stringify(plan));
+    copy.days = (Array.isArray(copy.days) ? copy.days : [])
+      .filter((d): d is Day => !!d && typeof d === 'object')
+      .map(d => ({ ...d, stops: Array.isArray(d.stops) ? d.stops : [] }));
+    return copy;
+  });
+  // An empty plan is one the visitor is about to fill in, so it opens in edit
+  // mode rather than showing them an empty day and an Edit button.
+  const [isEditing, setIsEditing] = useState(
+    () => (plan.days ?? []).every(d => !(d.stops ?? []).length),
+  );
+  const [sortMode, setSortMode]   = useState<'ai' | 'location'>('ai');
+  const [preSortPlan, setPreSortPlan] = useState<GeneratedPlan | null>(null);
+  const [selectedPlace, setSelectedPlace] = useState<string | null>(null);
+  const [allAttractions, setAllAttractions] = useState<any[]>([]);
+  const [showShareCard, setShowShareCard] = useState(false);
+
+  // Delete confirm + suggestions
+  const [deleteTarget, setDeleteTarget] = useState<{ dayIdx: number; stopIdx: number; place: string } | null>(null);
+  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+
+  // Map
+  const mapContainer = useRef<HTMLDivElement>(null);
+  const mapInstance = useRef<any>(null);
+  const markerRefs = useRef<Record<number, { marker: any; popup: any; coord: [number, number] }>>({});
+  const [showMap, setShowMap] = useState(true);
+
+  const dayColor = (dayNum: number) => PENNANT[(dayNum - 1) % PENNANT.length];
+
+  // Global stop index (0-based, matches marker numbering) for a given day/stop position
+  const stopGlobalIndex = (dayIdx: number, stopIdx: number) => {
+    let idx = 0;
+    for (let d = 0; d < dayIdx; d++) idx += localPlan.days[d]?.stops?.length || 0;
+    return idx + stopIdx;
+  };
+
+  const handleStopHover = (globalIdx: number, hovering: boolean) => {
+    const entry = markerRefs.current[globalIdx];
+    if (!entry || !mapInstance.current) return;
+    const el = entry.marker.getElement();
+    if (hovering) {
+      el.style.transform += ' scale(1.25)';
+      el.style.zIndex = '10';
+      entry.popup.setLngLat(entry.coord).addTo(mapInstance.current);
+    } else {
+      el.style.transform = el.style.transform.replace(' scale(1.25)', '');
+      el.style.zIndex = '';
+      entry.popup.remove();
+    }
+  };
+
+  useEffect(() => {
+    fetch('/api/content/attractions').then(r => r.json()).then(json => setAllAttractions(json.data ?? [])).catch(() => {});
+  }, []);
+
+  // Only place names + day order actually need to re-geocode/re-route the map;
+  // typing in a stop's time/duration/activity/tip field shouldn't tear down
+  // and rebuild the whole map (and re-fire Mapbox geocoding/directions calls)
+  // on every keystroke, so the map effect below depends on this instead of
+  // the full localPlan object.
+  const stopsSignature = useMemo(
+    () => JSON.stringify(localPlan.days.map((d: any) => ({ day: d.day, places: d.stops.map((s: Stop) => s.place) }))),
+    [localPlan],
+  );
+
+  // Shared name → [lng, lat] lookup, used both to draw the map and to sort
+  // stops geographically. Fuzzy: exact match first, then partial substring.
+  const attractionCoords = useMemo(() => {
+    const coords = new Map<string, [number, number]>();
+    for (const a of allAttractions) {
+      const name = (a.attributes?.name || '').toLowerCase();
+      const c = a.attributes?.coordinates;
+      if (name && c) {
+        const lng = c.lng ?? c.longitude ?? c.lon;
+        const lat = c.lat ?? c.latitude;
+        if (typeof lng === 'number' && typeof lat === 'number') coords.set(name, [lng, lat]);
+      }
+    }
+    return coords;
+  }, [allAttractions]);
+
+  const findCoord = useCallback((place: string): [number, number] | undefined => {
+    const key = place.toLowerCase().trim();
+    if (attractionCoords.has(key)) return attractionCoords.get(key);
+    for (const [name, coord] of attractionCoords) {
+      if (name.includes(key) || key.includes(name)) return coord;
+    }
+    return undefined;
+  }, [attractionCoords]);
+
+  /**
+   * How far apart two consecutive stops are, in kilometres.
+   *
+   * Straight-line, using the same haversine the QR check-in uses, and the same
+   * coordinate lookup the proximity reordering below already relies on. It is
+   * honest about being a straight line — a road distance would need a
+   * Directions call per leg, billed per request, for a number that is only ever
+   * read as "these two are close" or "these two are not".
+   *
+   * Returns null when either stop has no coordinates, and nothing is shown
+   * rather than a guess.
+   */
+  /**
+   * Road distances per day, keyed by day index, filled in once Directions has
+   * answered. Straight-line is what shows until then and if it never does, so
+   * a number is always present rather than a gap that fills in late.
+   */
+  const [roadLegs, setRoadLegs] = useState<Record<number, { legs: number[]; source: string }>>({});
+
+  const legKm = useCallback((from: string, to: string): number | null => {
+    const a = findCoord(from);
+    const b = findCoord(to);
+    if (!a || !b) return null;
+    // findCoord returns [lng, lat] — the order Mapbox uses and the order the
+    // proximity sort below expects. distanceMeters takes latitude first, so
+    // reading them in array order measured a point 121° north of the equator
+    // against another, which is not anywhere.
+    return distanceMeters(a[1], a[0], b[1], b[0]) / 1000;
+  }, [findCoord]);
+
+  /**
+   * Everything the share card needs, derived rather than tracked separately —
+   * the same road-vs-straight-line distance each day's own leg labels already
+   * show, just summed, so the card can never disagree with the itinerary
+   * underneath it.
+   */
+  const shareStats = useMemo(() => {
+    let distanceKm = 0;
+    let hasAnyLeg = false;
+    let placesCount = 0;
+    const routeStops: { name: string; day: number; coord: [number, number] | null }[] = [];
+
+    /**
+     * findCoord falls back to a fuzzy substring match when a stop's name
+     * isn't exact, which occasionally locks onto the wrong attraction
+     * entirely — the share card's route then shoots out to wherever that one
+     * is, miles from the rest of the trip, and Mapbox's auto-fit zooms out to
+     * include it, shrinking the real trip into a corner. Liliw is a few
+     * kilometres across, so a match more than 8km from its centre is treated
+     * as unresolved and handed to the card to geocode within the town
+     * instead — the stop still appears, just placed by Mapbox rather than by
+     * a match that was probably never the right place.
+     */
+    const LILIW_CENTER: [number, number] = [121.4359, 14.1297];
+    const nearTown = (coord: [number, number] | undefined): [number, number] | null => {
+      if (!coord) return null;
+      return distanceMeters(coord[1], coord[0], LILIW_CENTER[1], LILIW_CENTER[0]) <= 8000 ? coord : null;
+    };
+
+    localPlan.days.forEach((day, dayIdx) => {
+      const stops = day.stops ?? [];
+      placesCount += stops.length;
+      const road = roadLegs[dayIdx];
+      stops.forEach((stop, stopIdx) => {
+        routeStops.push({
+          name: stop.place,
+          day: day.day || dayIdx + 1,
+          coord: nearTown(findCoord(stop.place)),
+        });
+        const next = stops[stopIdx + 1];
+        if (!next) return;
+        const roadKm = road && typeof road.legs[stopIdx] === 'number' ? road.legs[stopIdx] / 1000 : null;
+        const km = roadKm ?? legKm(stop.place, next.place);
+        if (km != null) { distanceKm += km; hasAnyLeg = true; }
+      });
+    });
+
+    return {
+      distanceKm: hasAnyLeg ? distanceKm : null,
+      placesCount,
+      daysCount: localPlan.days.length,
+      routeStops,
+    };
+  }, [localPlan, roadLegs, findCoord, legKm]);
+
+  /**
+   * Ask Mapbox for the real driving distance of each day's route.
+   *
+   * One request per day rather than per leg — Directions returns a leg for
+   * every consecutive pair — and only when the sequence of places actually
+   * changes, which stopsSignature already tracks for the reordering below.
+   *
+   * Driving, because that is the profile that obeys one-way streets and turn
+   * restrictions; walking deliberately ignores both, which is correct for
+   * someone on foot but wrong as a stated distance for a trip.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      const next: Record<number, { legs: number[]; source: string }> = {};
+
+      await Promise.all(localPlan.days.map(async (day: any, dayIdx: number) => {
+        const coords = (day.stops ?? [])
+          .map((st: Stop) => findCoord(st.place))
+          .filter(Boolean) as [number, number][];
+
+        // Only when every stop is placed: a gap would silently shift the legs
+        // so that a distance is shown against the wrong pair.
+        if (coords.length < 2 || coords.length !== (day.stops?.length ?? 0)) return;
+
+        try {
+          const res = await fetch('/api/route-distance', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            // findCoord already returns [lng, lat], which is what Directions
+            // takes. Swapping here sent latitude 121, which is not a latitude,
+            // and every leg fell back to the straight-line figure.
+            body: JSON.stringify({ coords, profile: 'driving' }),
+          });
+          const d = await res.json();
+          if (Array.isArray(d?.legs)) next[dayIdx] = { legs: d.legs, source: d.source };
+        } catch {
+          // Straight-line stays on screen.
+        }
+      }));
+
+      if (!cancelled) setRoadLegs(next);
+    })();
+
+    return () => { cancelled = true; };
+  }, [stopsSignature, findCoord]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reorder each day's stops by geographic proximity (greedy nearest-neighbour,
+  // starting from the day's first stop) so the route doubles back as little as
+  // possible. Stops we can't geocode keep their original relative position at
+  // the end. Time fields are re-assigned in the original order so the schedule
+  // still reads sensibly after the shuffle.
+  const sortByLocation = () => {
+    const next: GeneratedPlan = JSON.parse(JSON.stringify(localPlan));
+    for (const day of next.days) {
+      const stops: Stop[] = day.stops ?? [];
+      if (stops.length < 3) continue;
+      const times = stops.map(s => s.time);
+      const located = stops.map(s => ({ stop: s, coord: findCoord(s.place) }));
+      const withCoord = located.filter(e => e.coord) as { stop: Stop; coord: [number, number] }[];
+      const without   = located.filter(e => !e.coord).map(e => e.stop);
+      if (withCoord.length < 3) continue;
+
+      const ordered: Stop[] = [];
+      const remaining = [...withCoord];
+      let current = remaining.shift()!;
+      ordered.push(current.stop);
+      while (remaining.length) {
+        let bestIdx = 0, bestDist = Infinity;
+        for (let i = 0; i < remaining.length; i++) {
+          const dx = remaining[i].coord[0] - current.coord[0];
+          const dy = remaining[i].coord[1] - current.coord[1];
+          const dist = dx * dx + dy * dy;
+          if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+        }
+        current = remaining.splice(bestIdx, 1)[0];
+        ordered.push(current.stop);
+      }
+      day.stops = [...ordered, ...without].map((s, i) => ({ ...s, time: times[i] ?? s.time }));
+    }
+    // Snapshot the pre-sort order so toggling back restores it — including any
+    // edits the user made — rather than reverting to the original AI response.
+    setPreSortPlan(JSON.parse(JSON.stringify(localPlan)));
+    setLocalPlan(next);
+    setSortMode('location');
+  };
+
+  const restoreAiOrder = () => {
+    if (preSortPlan) setLocalPlan(preSortPlan);
+    setPreSortPlan(null);
+    setSortMode('ai');
+  };
+
+  useEffect(() => {
+    if (!showMap || !mapContainer.current) return;
+    let cancelled = false;
+    const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || '';
+
+    import('mapbox-gl').then(async ({ default: mapboxgl }) => {
+      if (cancelled || !mapContainer.current) return;
+      if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; }
+      // @ts-ignore
+      mapboxgl.accessToken = MAPBOX_TOKEN;
+      const map = new mapboxgl.Map({ container: mapContainer.current, style: 'mapbox://styles/mapbox/streets-v12', center: [121.4359, 14.1297], zoom: 13 });
+      mapInstance.current = map;
+      map.on('load', async () => {
+        if (cancelled) return;
+        markerRefs.current = {};
+        const coords: [number, number][] = [];
+        if (userLocation) {
+          coords.push(userLocation);
+          new mapboxgl.Marker({ color: '#1565C0' }).setLngLat(userLocation).setPopup(new mapboxgl.Popup({ offset: 25 }).setText('Your Location')).addTo(map);
+        }
+        const allStops = localPlan.days.flatMap((d: any) =>
+          d.stops.map((s: Stop) => ({ ...s, dayNum: d.day as number }))
+        ).filter((s: any) => s.place);
+
+        const makeMarkerEl = (num: number, color: string) => {
+          const el = document.createElement('div');
+          el.style.cssText = `
+            width:34px;height:34px;border-radius:50%;
+            background:${color};border:3px solid #F5C518;
+            box-shadow:0 2px 10px rgba(0,0,0,0.35);
+            display:flex;align-items:center;justify-content:center;
+            color:#fff;font-weight:700;font-size:13px;
+            font-family:system-ui,sans-serif;cursor:pointer;
+            transition:transform 0.15s ease;
+          `;
+          el.textContent = String(num);
+          return el;
+        };
+
+        const makePopupHtml = (stop: any, num: number, color: string) => {
+          const strapiAttr = allAttractions.find(
+            (a: any) => (a.attributes?.name || '').toLowerCase() === stop.place.toLowerCase()
+          )?.attributes;
+          const desc = strapiAttr?.description
+            ? stripHtml(typeof strapiAttr.description === 'string'
+                ? strapiAttr.description
+                : blocksToText(strapiAttr.description)
+              ).substring(0, 120)
+            : stop.activity || '';
+          const photo = strapiAttr?.photos?.[0]
+            ? getPhotoUrl(strapiAttr.photos[0])
+            : null;
+          return `
+            <div style="font-family:system-ui,sans-serif;min-width:220px;max-width:260px;background:#fff;border-radius:10px;overflow:hidden;">
+              ${photo ? `<img src="${photo}" alt="${stop.place}" style="width:100%;height:110px;object-fit:cover;display:block;" />` : ''}
+              <div style="padding:12px;">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+                  <span style="background:${color};color:#fff;font-weight:700;font-size:11px;padding:2px 8px;border-radius:20px">Stop ${num}</span>
+                  ${stop.time ? `<span style="color:#9CA3AF;font-size:11px">${stop.time}</span>` : ''}
+                </div>
+                <p style="font-weight:700;font-size:14px;color:#1A1A2E;margin:0 0 4px">${stop.place}</p>
+                ${desc ? `<p style="font-size:12px;color:#4B5563;margin:0 0 6px;line-height:1.5">${desc}${desc.length >= 120 ? '…' : ''}</p>` : ''}
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  ${stop.duration ? `<span style="font-size:11px;color:#1565C0;background:rgba(21,101,192,0.08);padding:2px 8px;border-radius:20px">⏱ ${stop.duration}</span>` : ''}
+                  ${stop.dayNum ? `<span style="font-size:11px;color:#6B7280;background:#F3F4F6;padding:2px 8px;border-radius:20px">Day ${stop.dayNum}</span>` : ''}
+                </div>
+                ${stop.tip ? `<p style="font-size:11px;color:#6B7280;margin:6px 0 0;font-style:italic">💡 ${stop.tip}</p>` : ''}
+              </div>
+            </div>
+          `;
+        };
+
+        // Spread markers that land on (near-)identical coordinates so they don't stack unreadably
+        const usedCoordCounts: Record<string, number> = {};
+        const nudgeForDisplay = (coord: [number, number]): [number, number] => {
+          const key = `${coord[0].toFixed(4)},${coord[1].toFixed(4)}`;
+          const count = usedCoordCounts[key] || 0;
+          usedCoordCounts[key] = count + 1;
+          if (count === 0) return coord;
+          const angle = count * 137.5 * (Math.PI / 180);
+          const radius = 0.00028 * count;
+          return [coord[0] + Math.cos(angle) * radius, coord[1] + Math.sin(angle) * radius];
+        };
+
+        const dayCoords = new Map<number, [number, number][]>();
+
+        for (let i = 0; i < allStops.length; i++) {
+          const stop = allStops[i];
+          const stopNum = i + 1;
+          const dayNum = stop.dayNum || 1;
+          const color = dayColor(dayNum);
+          const strapiCoord = findCoord(stop.place);
+          const addHoverMarker = (coord: [number, number]) => {
+            const displayCoord = nudgeForDisplay(coord);
+            const el = makeMarkerEl(stopNum, color);
+            const marker = new mapboxgl.Marker({ element: el }).setLngLat(displayCoord).addTo(map);
+            const popup = new mapboxgl.Popup({ offset: 20, maxWidth: '280px', closeButton: false, closeOnClick: false })
+              .setHTML(makePopupHtml(stop, stopNum, color));
+            el.addEventListener('mouseenter', () => popup.setLngLat(displayCoord).addTo(map));
+            el.addEventListener('mouseleave', () => popup.remove());
+            markerRefs.current[i] = { marker, popup, coord: displayCoord };
+          };
+
+          let coord: [number, number] | undefined = strapiCoord;
+          if (!coord) {
+            try {
+              const q = encodeURIComponent(`${stop.place}, Liliw, Laguna, Philippines`);
+              const r = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${MAPBOX_TOKEN}&limit=1&bbox=121.40,14.10,121.47,14.16&country=ph`);
+              const d = await r.json();
+              coord = d?.features?.[0]?.center as [number, number] | undefined;
+              if (!coord) console.error('Itinerary map: could not geocode stop', stop.place, d);
+            } catch (err) {
+              console.error('Itinerary map: geocoding request failed for', stop.place, err);
+            }
+          }
+          if (coord) {
+            coords.push(coord);
+            addHoverMarker(coord);
+            if (!dayCoords.has(dayNum)) dayCoords.set(dayNum, []);
+            dayCoords.get(dayNum)!.push(coord);
+          }
+        }
+
+        // Prepend the user's location to the first day's route only
+        if (userLocation && dayCoords.size > 0) {
+          const firstDay = Math.min(...dayCoords.keys());
+          dayCoords.get(firstDay)!.unshift(userLocation);
+        }
+
+        if (!map.hasImage('route-arrow')) {
+          // Solid silhouette + sdf:true lets each day's arrow layer tint via icon-color to match its route color
+          const size = 32;
+          const canvasEl = document.createElement('canvas');
+          canvasEl.width = size; canvasEl.height = size;
+          const ctx = canvasEl.getContext('2d')!;
+          ctx.beginPath();
+          ctx.moveTo(size * 0.2, size * 0.12);
+          ctx.lineTo(size * 0.85, size * 0.5);
+          ctx.lineTo(size * 0.2, size * 0.88);
+          ctx.closePath();
+          ctx.fillStyle = '#000000';
+          ctx.fill();
+          map.addImage('route-arrow', ctx.getImageData(0, 0, size, size), { pixelRatio: 1, sdf: true });
+        }
+
+        const drawDayRoute = async (day: number, dayLine: [number, number][]) => {
+          const color = dayColor(day);
+          const sourceId = `route-day-${day}`;
+          let geometry: any = { type: 'LineString', coordinates: dayLine };
+          try {
+            const waypointStr = dayLine.map(c => `${c[0]},${c[1]}`).join(';');
+            const r = await fetch(`https://api.mapbox.com/directions/v5/mapbox/driving/${waypointStr}?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`);
+            const d = await r.json();
+            if (d.code && d.code !== 'Ok') throw new Error(`Directions API returned ${d.code}: ${d.message || ''}`);
+            if (d?.routes?.[0]?.geometry) geometry = d.routes[0].geometry;
+            else throw new Error('No route geometry returned');
+          } catch (err) {
+            console.error(`Itinerary map: driving directions failed for day ${day}, falling back to straight line`, err);
+          }
+          map.addSource(sourceId, { type: 'geojson', data: { type: 'Feature', properties: {}, geometry } });
+          map.addLayer({ id: `${sourceId}-casing`, type: 'line', source: sourceId, layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#ffffff', 'line-width': 8, 'line-opacity': 0.6 } });
+          map.addLayer({ id: sourceId, type: 'line', source: sourceId, layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': color, 'line-width': 4, 'line-opacity': 0.95 } });
+          map.addLayer({
+            id: `${sourceId}-arrows`,
+            type: 'symbol',
+            source: sourceId,
+            layout: {
+              'symbol-placement': 'line',
+              'symbol-spacing': 140,
+              'icon-image': 'route-arrow',
+              'icon-size': 0.75,
+              'icon-allow-overlap': true,
+              'icon-ignore-placement': true,
+              'icon-rotation-alignment': 'map',
+            },
+            paint: {
+              'icon-color': color,
+              'icon-halo-color': '#ffffff',
+              'icon-halo-width': 1,
+            },
+          });
+        };
+
+        if (coords.length >= 2) {
+          for (const [day, dayLine] of Array.from(dayCoords.entries()).sort((a, b) => a[0] - b[0])) {
+            if (dayLine.length >= 2) await drawDayRoute(day, dayLine);
+          }
+          const bounds = coords.reduce((b, c) => b.extend(c as any), new mapboxgl.LngLatBounds(coords[0], coords[0]));
+          map.fitBounds(bounds, { padding: 80 });
+        } else if (coords.length === 1) {
+          map.setCenter(coords[0]); map.setZoom(14);
+        }
+      });
+    });
+    return () => { cancelled = true; mapInstance.current?.remove(); mapInstance.current = null; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on stopsSignature, not localPlan; see comment above
+  }, [showMap, userLocation, stopsSignature, allAttractions]);
+
+  /* A place to stay only makes sense when the trip runs past a single day.
+     A half-day or full-day tour ends with you going home, so accommodation
+     is left out of the picker entirely; a 2+ day trip (or one the plan
+     itself split across days) gets it as its own group. */
+  const isMultiDay =
+    (localPlan.days?.length ?? 1) > 1 ||
+    /\b([2-9]|\d{2,})\s*days?\b/i.test(duration) ||
+    /\bovernight\b|\bnights?\b|\bweekend\b/i.test(duration);
+
+  const allowedTypes = Array.from(
+    new Set([
+      ...(interests.length > 0
+        ? interests.flatMap(i => INTEREST_TO_TYPES[i] || (['heritage', 'spot', 'dining'] as const))
+        : (['heritage', 'spot', 'dining'] as const)),
+      ...(isMultiDay ? (['stay'] as const) : []),
+    ])
+  ) as ItineraryPlaceType[];
+
+  const filteredAttractions = allAttractions.filter(a => allowedTypes.includes(a.type));
+
+  const updateStop = (dayIdx: number, stopIdx: number, field: keyof Stop, value: string) => {
+    setLocalPlan(prev => {
+      const next: GeneratedPlan = JSON.parse(JSON.stringify(prev));
+      next.days[dayIdx].stops[stopIdx][field] = value;
+      return next;
+    });
+  };
+
+  const openDeleteDialog = async (dayIdx: number, stopIdx: number, place: string) => {
+    setDeleteTarget({ dayIdx, stopIdx, place });
+    setLoadingSuggestions(true);
+    setSuggestions([]);
+    try {
+      const inPlan = new Set(localPlan.days.flatMap((d: any) => d.stops.map((s: Stop) => s.place.toLowerCase())));
+      const filtered = filteredAttractions
+        .filter(a => !inPlan.has((a.attributes?.name || '').toLowerCase()))
+        .slice(0, 4)
+        .map(a => {
+          const rawUrl = a.attributes?.photos?.[0]?.url;
+          const photo = rawUrl?.startsWith('http') ? rawUrl : null;
+          return { id: a.id, name: a.attributes?.name || '', category: a.attributes?.category || a.type || '', location: a.attributes?.location || '', photo };
+        });
+      setSuggestions(filtered);
+    } catch { setSuggestions([]); }
+    finally { setLoadingSuggestions(false); }
+  };
+
+  const confirmDelete = () => {
+    if (!deleteTarget) return;
+    setLocalPlan(prev => {
+      const next: GeneratedPlan = JSON.parse(JSON.stringify(prev));
+      next.days[deleteTarget.dayIdx].stops = next.days[deleteTarget.dayIdx].stops.filter((_: Stop, i: number) => i !== deleteTarget.stopIdx);
+      return next;
+    });
+    setDeleteTarget(null); setSuggestions([]);
+  };
+
+  const swapWithSuggestion = (name: string) => {
+    if (!deleteTarget) return;
+    setLocalPlan(prev => {
+      const next: GeneratedPlan = JSON.parse(JSON.stringify(prev));
+      next.days[deleteTarget.dayIdx].stops[deleteTarget.stopIdx].place = name;
+      next.days[deleteTarget.dayIdx].stops[deleteTarget.stopIdx].activity = '';
+      next.days[deleteTarget.dayIdx].stops[deleteTarget.stopIdx].tip = '';
+      return next;
+    });
+    setDeleteTarget(null); setSuggestions([]);
+  };
+
+  // Drag-to-reorder. Rows are only draggable while the grip handle is held —
+  // otherwise the browser's native drag would fight text selection in the
+  // inputs that make up an editable stop.
+  const [dragRow, setDragRow] = useState<string | null>(null);
+  const [dragFrom, setDragFrom] = useState<{ dayIdx: number; stopIdx: number } | null>(null);
+  const [dragOver, setDragOver] = useState<string | null>(null);
+
+  const moveStop = (dayIdx: number, from: number, to: number) => {
+    if (from === to) return;
+    setLocalPlan(prev => {
+      const next: GeneratedPlan = JSON.parse(JSON.stringify(prev));
+      const stops: Stop[] = next.days[dayIdx].stops;
+      // Times belong to the slot, not the stop — a stop dragged into the 9 AM
+      // position takes over the 9 AM slot rather than carrying its old time.
+      const times = stops.map(s => s.time);
+      const [moved] = stops.splice(from, 1);
+      stops.splice(to, 0, moved);
+      next.days[dayIdx].stops = stops.map((s, i) => ({ ...s, time: times[i] ?? s.time }));
+      return next;
+    });
+  };
+
+  const deleteStop = (dayIdx: number, stopIdx: number) => {
+    setLocalPlan(prev => {
+      const next: GeneratedPlan = JSON.parse(JSON.stringify(prev));
+      next.days[dayIdx].stops = next.days[dayIdx].stops.filter((_: Stop, i: number) => i !== stopIdx);
+      return next;
+    });
+  };
+
+  const addStop = (dayIdx: number) => {
+    setLocalPlan(prev => {
+      const next: GeneratedPlan = JSON.parse(JSON.stringify(prev));
+      next.days[dayIdx].stops.push({ time: '', place: '', activity: '', duration: '', tip: '' });
+      return next;
+    });
+  };
+
+  const updateDayTheme = (dayIdx: number, value: string) => {
+    setLocalPlan(prev => {
+      const next: GeneratedPlan = JSON.parse(JSON.stringify(prev));
+      next.days[dayIdx].theme = value;
+      return next;
+    });
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} className="space-y-6">
+      {/* Header */}
+      <div className="rounded-3xl p-6 text-white" style={{ background: 'linear-gradient(135deg,#0B3D91,#1565C0)' }}>
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-widest mb-1" style={{ color: '#F5C518', fontFamily: HL }}>Your Itinerary</p>
+            <h2 className="text-2xl font-bold leading-tight mb-2" style={{ fontFamily: DL }}>{localPlan.title}</h2>
+            <p className="text-blue-100 text-sm leading-relaxed" style={{ fontFamily: BL }}>{localPlan.summary}</p>
+          </div>
+          {/* Edit sits in the corner itself, not under the icon — it is the
+              control people look for and it was the lower of the two. */}
+          <div className="flex flex-col items-end gap-2 shrink-0">
+            <motion.button
+              whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+              onClick={() => setIsEditing(v => !v)}
+              className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full transition ${
+                isEditing ? 'bg-white' : 'bg-white/20 hover:bg-white/30 text-white'
+              }`}
+              style={{ color: isEditing ? '#1565C0' : undefined, fontFamily: HL }}>
+              {isEditing ? <Check className="w-3.5 h-3.5" /> : <Pencil className="w-3.5 h-3.5" />}
+              {isEditing ? 'Done' : 'Edit'}
+            </motion.button>
+            <Sparkles className="w-8 h-8" style={{ color: '#F5C518' }} />
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          {localPlan.estimatedCostPerDay && (
+            <div className="inline-flex items-center gap-2 bg-white/20 rounded-xl px-4 py-2">
+              <Wallet className="w-4 h-4" />
+              <span className="text-sm font-semibold" style={{ fontFamily: BL }}>{localPlan.estimatedCostPerDay} per day</span>
+            </div>
+          )}
+          {/* Order toggle — AI's suggested flow vs. shortest-travel geographic order */}
+          <div className="inline-flex items-center rounded-xl p-0.5 bg-white/20">
+            <button onClick={restoreAiOrder}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition"
+              style={sortMode === 'ai'
+                ? { backgroundColor: '#F5C518', color: '#0B3D91', fontFamily: HL }
+                : { color: 'rgba(255,255,255,0.75)', fontFamily: HL }}>
+              <Sparkles className="w-3.5 h-3.5" /> AI order
+            </button>
+            <button onClick={sortByLocation}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition"
+              style={sortMode === 'location'
+                ? { backgroundColor: '#F5C518', color: '#0B3D91', fontFamily: HL }
+                : { color: 'rgba(255,255,255,0.75)', fontFamily: HL }}>
+              <Navigation className="w-3.5 h-3.5" /> By location
+            </button>
+          </div>
+        </div>
+        {sortMode === 'location' && (
+          <p className="mt-2 text-xs text-blue-100/80" style={{ fontFamily: BL }}>
+            Stops reordered to keep travel between them as short as possible. Times stay in their original slots.
+          </p>
+        )}
+      </div>
+
+      {/* Days + Map, side by side */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+      <div className="space-y-6">
+      {localPlan.days?.map((day, dayIdx) => (
+        <motion.div key={dayIdx} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: dayIdx * 0.1 }}
+          className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0"
+              style={{ backgroundColor: dayColor(day.day), fontFamily: HL }}>{day.day}</div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-gray-400 font-medium" style={{ fontFamily: BL }}>Day {day.day}</p>
+              {isEditing ? (
+                <input
+                  value={day.theme}
+                  onChange={e => updateDayTheme(dayIdx, e.target.value)}
+                  className="text-sm font-bold text-gray-900 w-full border-b border-blue-300 focus:outline-none bg-transparent"
+                  style={{ fontFamily: HL }}
+                  placeholder="Day theme..."
+                />
+              ) : (
+                <p className="text-sm font-bold text-gray-900" style={{ fontFamily: HL }}>{day.theme}</p>
+              )}
+            </div>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {day.stops?.map((stop, stopIdx) => {
+              // Distance to the next stop, shown on the connector between them.
+              // Road distance where Directions has answered, straight-line
+              // until then and if it never does.
+              const next = day.stops[stopIdx + 1];
+              const road = roadLegs[dayIdx];
+              const roadKm = road && typeof road.legs[stopIdx] === 'number'
+                ? road.legs[stopIdx] / 1000
+                : null;
+              const km = next ? (roadKm ?? legKm(stop.place, next.place)) : null;
+              const byRoad = roadKm !== null && road?.source === 'road';
+              return (
+              <div key={stopIdx}
+                draggable={dragRow === `${dayIdx}-${stopIdx}`}
+                onDragStart={() => setDragFrom({ dayIdx, stopIdx })}
+                onDragEnd={() => { setDragRow(null); setDragFrom(null); setDragOver(null); }}
+                onDragOver={e => {
+                  if (!dragFrom || dragFrom.dayIdx !== dayIdx) return;
+                  e.preventDefault();
+                  setDragOver(`${dayIdx}-${stopIdx}`);
+                }}
+                onDrop={e => {
+                  if (!dragFrom || dragFrom.dayIdx !== dayIdx) return;
+                  e.preventDefault();
+                  moveStop(dayIdx, dragFrom.stopIdx, stopIdx);
+                  setDragRow(null); setDragFrom(null); setDragOver(null);
+                }}
+                className={`px-5 py-4 flex gap-4 transition-colors ${
+                  dragOver === `${dayIdx}-${stopIdx}` && dragFrom?.stopIdx !== stopIdx ? 'bg-blue-50' : ''
+                } ${dragFrom && `${dragFrom.dayIdx}-${dragFrom.stopIdx}` === `${dayIdx}-${stopIdx}` ? 'opacity-40' : ''}`}
+                onMouseEnter={() => handleStopHover(stopGlobalIndex(dayIdx, stopIdx), true)}
+                onMouseLeave={() => handleStopHover(stopGlobalIndex(dayIdx, stopIdx), false)}>
+                {isEditing && (
+                  <div className="shrink-0 self-start mt-0.5 -ml-2 flex flex-col items-center">
+                    {/* Up/down buttons carry the reordering on touch (and for
+                        keyboard users) — HTML5 drag events never fire on phones,
+                        so the grip alone would be dead weight there. */}
+                    <button onClick={() => moveStop(dayIdx, stopIdx, stopIdx - 1)} disabled={stopIdx === 0}
+                      aria-label="Move stop up" title="Move up"
+                      className="p-0.5 rounded text-gray-300 hover:text-gray-600 hover:bg-gray-100 disabled:opacity-25 disabled:hover:bg-transparent transition">
+                      <ChevronUp className="w-3.5 h-3.5" />
+                    </button>
+                    <div
+                      onMouseDown={() => setDragRow(`${dayIdx}-${stopIdx}`)}
+                      onMouseUp={() => setDragRow(null)}
+                      title="Drag to reorder this stop"
+                      className="hidden sm:block p-0.5 rounded text-gray-300 hover:text-gray-500 hover:bg-gray-100 cursor-grab active:cursor-grabbing transition">
+                      <GripVertical className="w-4 h-4" />
+                    </div>
+                    <button onClick={() => moveStop(dayIdx, stopIdx, stopIdx + 1)} disabled={stopIdx === day.stops.length - 1}
+                      aria-label="Move stop down" title="Move down"
+                      className="p-0.5 rounded text-gray-300 hover:text-gray-600 hover:bg-gray-100 disabled:opacity-25 disabled:hover:bg-transparent transition">
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+                <div className="shrink-0 flex flex-col items-center gap-1 pt-0.5">
+                  <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
+                    style={{ backgroundColor: dayColor(day.day) }}>{stopGlobalIndex(dayIdx, stopIdx) + 1}</div>
+                  {stopIdx < (day.stops.length - 1) && (
+                    <div className="w-px flex-1 min-h-6" style={{ backgroundColor: 'rgba(11,61,145,0.12)' }} />
+                  )}
+                  {km !== null && (
+                    <span className="text-[9px] font-bold leading-none whitespace-nowrap px-1 py-0.5 rounded"
+                      title={`${byRoad ? 'Driving distance' : 'Straight-line distance'} to ${next?.place ?? 'the next stop'}`}
+                      style={{ color: '#64748B', backgroundColor: 'rgba(11,61,145,0.06)', fontFamily: BL }}>
+                      {km < 1 ? `${Math.round(km * 100) * 10} m` : `${km.toFixed(1)} km`}
+                    </span>
+                  )}
+                </div>
+                <div className="flex-1 min-w-0 pb-2">
+                  {isEditing ? (
+                    <div className="space-y-2">
+                      <div className="flex gap-2">
+                        <input value={stop.time} onChange={e => updateStop(dayIdx, stopIdx, 'time', e.target.value)}
+                          className="w-24 text-xs font-bold px-2 py-0.5 rounded-full border focus:outline-none focus:border-blue-400"
+                          style={{ backgroundColor: 'rgba(245,197,24,0.12)', color: '#1565C0', borderColor: 'rgba(245,197,24,0.3)', fontFamily: HL }}
+                          placeholder="Time" />
+                        <input value={stop.duration} onChange={e => updateStop(dayIdx, stopIdx, 'duration', e.target.value)}
+                          className="flex-1 text-xs text-gray-500 bg-gray-50 px-2 py-0.5 rounded-full border border-gray-200 focus:outline-none"
+                          style={{ fontFamily: BL }}
+                          placeholder="Duration (e.g. 1 hr)" />
+                      </div>
+                      <div className="relative">
+                        <select
+                          value={stop.place}
+                          onChange={e => updateStop(dayIdx, stopIdx, 'place', e.target.value)}
+                          className="w-full font-bold text-gray-900 text-sm border-b border-blue-200 focus:outline-none focus:border-blue-400 bg-white pb-0.5 appearance-none pr-5 cursor-pointer"
+                          style={{ fontFamily: HL }}>
+                          <option value="">Pick a place…</option>
+                          {(['heritage', 'spot', 'dining', 'footwear', 'stay'] as const)
+                            .filter(type => filteredAttractions.some(a => a.type === type))
+                            .map(type => {
+                              const label = type === 'heritage' ? 'Heritage' : type === 'spot' ? 'Tourist Spots' : type === 'dining' ? 'Dining' : type === 'footwear' ? 'Footwear Stores' : 'Accommodations';
+                              return (
+                                <optgroup key={type} label={label}>
+                                  {filteredAttractions
+                                    .filter(a => a.type === type)
+                                    .map((a: any) => (
+                                      <option key={a.id} value={a.attributes.name}>{a.attributes.name}</option>
+                                    ))}
+                                </optgroup>
+                              );
+                            })}
+                          {stop.place && !filteredAttractions.find((a: any) => a.attributes.name === stop.place) && (
+                            <option value={stop.place}>{stop.place}</option>
+                          )}
+                        </select>
+                        <ChevronDown className="absolute right-0.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+                      </div>
+                      <input value={stop.activity} onChange={e => updateStop(dayIdx, stopIdx, 'activity', e.target.value)}
+                        className="w-full text-sm text-gray-600 border-b border-gray-200 focus:outline-none bg-transparent pb-0.5"
+                        style={{ fontFamily: BL }}
+                        placeholder="Activity description" />
+                      <input value={stop.tip} onChange={e => updateStop(dayIdx, stopIdx, 'tip', e.target.value)}
+                        className="w-full text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-1.5 focus:outline-none"
+                        style={{ fontFamily: BL }}
+                        placeholder="Travel tip (optional)" />
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <span className="text-xs font-bold px-2 py-0.5 rounded-full"
+                          style={{ backgroundColor: 'rgba(245,197,24,0.15)', color: '#1565C0', fontFamily: HL }}>
+                          {stop.time}
+                        </span>
+                        {stop.duration && (
+                          <span className="text-xs text-gray-400 flex items-center gap-1" style={{ fontFamily: BL }}>
+                            <Clock className="w-3 h-3" />{stop.duration}
+                          </span>
+                        )}
+                      </div>
+                      <p className="font-bold text-gray-900 text-sm mb-0.5 flex items-center gap-1.5" style={{ fontFamily: HL }}>
+                        <MapPin className="w-3.5 h-3.5 shrink-0" style={{ color: '#1565C0' }} />
+                        <button
+                          onClick={() => setSelectedPlace(stop.place)}
+                          className="text-left hover:underline underline-offset-2"
+                          style={{ textDecorationColor: '#F5C518' }}>
+                          {stop.place}
+                        </button>
+                      </p>
+                      <p className="text-sm text-gray-600 mb-2" style={{ fontFamily: BL }}>{stop.activity}</p>
+                      {stop.tip && (
+                        <div className="flex items-start gap-2 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+                          <Lightbulb className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
+                          <p className="text-xs text-amber-800" style={{ fontFamily: BL }}>{stop.tip}</p>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+                {isEditing && (
+                  <button onClick={() => openDeleteDialog(dayIdx, stopIdx, stop.place)}
+                    className="shrink-0 p-1.5 rounded-lg text-gray-300 hover:text-red-400 hover:bg-red-50 transition self-start mt-1">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+              );
+            })}
+          </div>
+          {isEditing && (
+            <div className="px-5 py-3 border-t border-dashed border-gray-200 flex items-center justify-between gap-3 flex-wrap">
+              <button onClick={() => addStop(dayIdx)}
+                className="flex items-center gap-2 text-sm font-semibold transition hover:opacity-70"
+                style={{ color: '#1565C0', fontFamily: BL }}>
+                <Plus className="w-4 h-4" /> Add Stop
+              </button>
+              {day.stops.length > 1 && (
+                <span className="flex items-center gap-1.5 text-xs text-gray-400" style={{ fontFamily: BL }}>
+                  <GripVertical className="w-3.5 h-3.5 hidden sm:inline" />
+                  <span className="hidden sm:inline">Drag or use arrows to reorder</span>
+                  <span className="sm:hidden">Use arrows to reorder</span>
+                </span>
+              )}
+            </div>
+          )}
+        </motion.div>
+      ))}
+      </div>
+
+      <div className="lg:sticky lg:top-6">
+        {showMap && locationStatus === 'denied' && (
+          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+            className="flex items-center gap-2 p-4 mb-3 rounded-2xl bg-gray-50 border border-gray-200">
+            <Navigation className="w-4 h-4 shrink-0 text-gray-400" />
+            <p className="text-sm text-gray-500" style={{ fontFamily: BL }}>
+              Location is off, so the route starts at your first stop. Enable location in your browser to route from where you are.
+            </p>
+          </motion.div>
+        )}
+
+        <AnimatePresence>
+          {showMap && (
+            <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
+              <div className="flex items-center gap-2 mb-2">
+                <MapPin className="w-4 h-4" style={{ color: '#1565C0' }} />
+                <p className="font-bold text-sm text-gray-900" style={{ fontFamily: HL }}>Your Route</p>
+                {locationStatus === 'granted' && (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-semibold" style={{ fontFamily: BL }}>Starting from your location</span>
+                )}
+              </div>
+              <div ref={mapContainer} className="rounded-2xl overflow-hidden shadow-md lg:sticky lg:top-20"
+                style={{ height: 'clamp(480px, 72vh, 780px)' }} />
+              <p className="text-xs text-gray-400 mt-2 text-center" style={{ fontFamily: BL }}>Numbered pins = stops, colored by day (hover for details) · Blue line = driving route</p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+      </div>
+
+      {localPlan.tips?.length > 0 && (
+        <div className="rounded-2xl p-5" style={{ backgroundColor: 'rgba(11,61,145,0.05)', border: '1px solid rgba(11,61,145,0.12)' }}>
+          <p className="text-xs font-bold uppercase tracking-widest mb-3" style={{ color: '#1565C0', fontFamily: HL }}>Travel Tips</p>
+          <ul className="space-y-2">
+            {localPlan.tips.map((tip, i) => (
+              <li key={i} className="flex items-start gap-2 text-sm" style={{ color: '#1A1A2E', fontFamily: BL }}>
+                <Sun className="w-4 h-4 shrink-0 mt-0.5" style={{ color: '#F5C518' }} />{tip}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="flex gap-3">
+        <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={() => onSave(localPlan)}
+          className="flex-1 flex items-center justify-center gap-2 py-4 rounded-2xl font-semibold transition"
+          style={saved
+            ? { backgroundColor: 'rgba(11,61,145,0.07)', border: '2px solid #1565C0', color: '#1565C0', fontFamily: BL }
+            : { backgroundColor: '#1565C0', color: '#F5C518', fontFamily: BL, boxShadow: '0 6px 20px rgba(11,61,145,0.25)' }
+          }>
+          {isLoggedIn ? <BookmarkCheck className="w-4 h-4" /> : <LogIn className="w-4 h-4" />}
+          {saved ? 'Saved to My Trips' : isLoggedIn ? 'Save This Itinerary' : 'Log In to Save'}
+        </motion.button>
+        <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={() => setShowShareCard(true)}
+          className="shrink-0 flex items-center justify-center gap-2 px-5 py-4 rounded-2xl border-2 font-semibold transition"
+          style={{ borderColor: '#1565C0', color: '#1565C0' }}
+          title="Share this trip">
+          <Share2 className="w-4 h-4" />
+        </motion.button>
+        <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} onClick={onReset}
+          className="shrink-0 flex items-center justify-center gap-2 px-5 py-4 rounded-2xl border-2 border-gray-200 text-gray-600 font-semibold hover:border-gray-300 hover:bg-gray-50 transition">
+          <RotateCcw className="w-4 h-4" />
+        </motion.button>
+      </div>
+
+      {showShareCard && (
+        <ItineraryShareCard
+          title={localPlan.title || 'My Liliw Itinerary'}
+          subtitle={localPlan.summary || ''}
+          distanceKm={shareStats.distanceKm}
+          placesCount={shareStats.placesCount}
+          daysCount={shareStats.daysCount}
+          routeStops={shareStats.routeStops}
+          onClose={() => setShowShareCard(false)}
+        />
+      )}
+
+      <AnimatePresence>
+        {selectedPlace && (
+          <AttractionQuickModal placeName={selectedPlace} onClose={() => setSelectedPlace(null)} />
+        )}
+      </AnimatePresence>
+
+      {/* Delete confirm dialog */}
+      <AnimatePresence>
+        {deleteTarget && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4"
+            onClick={() => { setDeleteTarget(null); setSuggestions([]); }}>
+            <motion.div initial={{ y: 40, scale: 0.96 }} animate={{ y: 0, scale: 1 }} exit={{ y: 40, scale: 0.96 }}
+              transition={{ duration: 0.2 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
+              onClick={e => e.stopPropagation()}>
+              <div className="px-6 py-5 border-b border-gray-100 flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-bold text-gray-900" style={{ fontFamily: HL }}>Remove this stop?</p>
+                  <p className="text-sm text-gray-500 mt-0.5" style={{ fontFamily: BL }}>"{deleteTarget.place}"</p>
+                </div>
+                <button onClick={() => { setDeleteTarget(null); setSuggestions([]); }}
+                  className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="px-6 py-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Sparkles className="w-4 h-4" style={{ color: '#F5C518' }} />
+                  <p className="text-sm font-semibold text-gray-700" style={{ fontFamily: HL }}>Or swap with a suggestion based on your interests</p>
+                </div>
+                {loadingSuggestions ? (
+                  <div className="flex items-center gap-2 text-sm text-gray-400 py-3" style={{ fontFamily: BL }}>
+                    <div className="w-4 h-4 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin" /> Finding suggestions…
+                  </div>
+                ) : suggestions.length > 0 ? (
+                  <div className="space-y-2">
+                    {suggestions.map(s => (
+                      <button key={s.id} onClick={() => swapWithSuggestion(s.name)}
+                        className="w-full text-left rounded-xl border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition group overflow-hidden">
+                        {s.photo && (
+                          <div className="h-28 overflow-hidden">
+                            <img src={s.photo} alt={s.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+                          </div>
+                        )}
+                        <div className="px-4 py-3 flex items-center justify-between">
+                          <div>
+                            <p className="font-semibold text-sm text-gray-800 group-hover:text-blue-700" style={{ fontFamily: HL }}>{s.name}</p>
+                            {s.location && <p className="text-xs text-gray-400 flex items-center gap-1 mt-0.5" style={{ fontFamily: BL }}><MapPin className="w-3 h-3" />{s.location}</p>}
+                          </div>
+                          <span className="text-xs px-2 py-0.5 rounded-full font-semibold capitalize shrink-0 ml-2"
+                            style={{ backgroundColor: 'rgba(21,101,192,0.08)', color: '#1565C0', fontFamily: BL }}>{s.category}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-400 py-2" style={{ fontFamily: BL }}>No suggestions available.</p>
+                )}
+              </div>
+              <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex gap-3">
+                <button onClick={() => { setDeleteTarget(null); setSuggestions([]); }}
+                  className="flex-1 px-4 py-2.5 rounded-xl border border-gray-300 text-sm font-semibold text-gray-600 hover:bg-gray-100 transition"
+                  style={{ fontFamily: BL }}>Keep it</button>
+                <button onClick={confirmDelete}
+                  className="flex-1 px-4 py-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm font-bold transition flex items-center justify-center gap-1.5"
+                  style={{ fontFamily: HL }}>
+                  <Trash2 className="w-3.5 h-3.5" /> Yes, Remove
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+type WizardStep = 'duration' | 'groupSize' | 'budget' | 'interests' | 'favorites' | 'generating' | 'result';
+
+function ItineraryWizard() {
+  const { user, token } = useAuth();
+  const { favorites } = useFavorites();
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [step, setStep]                   = useState<WizardStep>('duration');
+  const [duration, setDuration]           = useState('');
+  const [customDuration, setCustomDuration] = useState('');
+  const [groupSize, setGroupSize]         = useState('');
+  const [customGroupSize, setCustomGroupSize] = useState('');
+  const [budget, setBudget]               = useState('');
+  const [customBudget, setCustomBudget]   = useState('');
+  const [interests, setInterests]         = useState<string[]>([]);
+  const [selectedFavs, setSelectedFavs]   = useState<string[]>([]);
+  const [plan, setPlan]                   = useState<GeneratedPlan | null>(null);
+  const [error, setError]                 = useState('');
+  const [tripSaved, setTripSaved]         = useState(false);
+  const [userLocation, setUserLocation]   = useState<[number, number] | null>(null);
+  const [locationStatus, setLocationStatus] = useState<'idle' | 'pending' | 'granted' | 'denied'>('idle');
+  const [wizardAttractions, setWizardAttractions] = useState<any[]>([]);
+
+  // Loaded once, up front, so "closest to you" can be shown the moment
+  // someone picks an interest and shares their location — no reason to wait
+  // for the AI round-trip just to answer a question distance already answers.
+  useEffect(() => {
+    fetch('/api/content/attractions').then(r => r.json()).then(json => setWizardAttractions(json.data ?? [])).catch(() => {});
+  }, []);
+
+  const hasFavorites = !!user && favorites.length > 0;
+
+  /**
+   * The closest published attractions matching the visitor's selected
+   * interests, nearest first.
+   *
+   * Someone in Pila wanting "Local Food & Cuisine" doesn't need a generated
+   * day plan to answer "what's closest to me right now" — that's a straight
+   * distance sort against real coordinates, the same haversine the QR
+   * check-in and the result view's proximity sort already use. The AI
+   * itinerary is still generated the normal way; this is a faster, more
+   * literal answer to a question the wizard used to leave to the model.
+   */
+  const nearestMatches = useMemo(() => {
+    if (!userLocation || interests.length === 0) return [];
+    const types = new Set(interests.flatMap(i => INTEREST_TO_TYPES[i] || []));
+    const [lng, lat] = userLocation;
+    return wizardAttractions
+      .map(a => {
+        const type = String(a.id ?? '').split('-')[0];
+        if (!types.has(type as ItineraryPlaceType)) return null;
+        const c = a.attributes?.coordinates;
+        const aLat = c?.latitude ?? c?.lat;
+        const aLng = c?.longitude ?? c?.lng ?? c?.lon;
+        if (typeof aLat !== 'number' || typeof aLng !== 'number') return null;
+        const name = a.attributes?.name;
+        if (!name) return null;
+        return { id: a.id as string, name: name as string, distanceKm: distanceMeters(lat, lng, aLat, aLng) / 1000 };
+      })
+      .filter((x): x is { id: string; name: string; distanceKm: number } => !!x)
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .slice(0, 3);
+  }, [userLocation, interests, wizardAttractions]);
+
+  const toggleInterest = (val: string) =>
+    setInterests(prev => prev.includes(val) ? prev.filter(i => i !== val) : [...prev, val]);
+  const toggleFav = (name: string) =>
+    setSelectedFavs(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
+
+  const effectiveDuration  = duration  === 'custom' ? customDuration.trim()  : duration;
+  const effectiveGroupSize = groupSize === 'custom' ? customGroupSize.trim() : groupSize;
+  const effectiveBudget    = budget    === 'custom' ? customBudget.trim()    : budget;
+
+  const afterInterests = () => hasFavorites ? setStep('favorites') : generate();
+
+  // Ask for location as part of generating rather than making the user click an
+  // "Allow" button on the result — the route is far more useful when it can
+  // start from where they actually are. Resolves either way so a denied or
+  // unavailable permission never blocks the itinerary. Also reused by the
+  // "closest to you" card on the interests step, so a location already
+  // captured there isn't asked for a second time when Generate is pressed.
+  const captureLocation = () =>
+    new Promise<void>(resolve => {
+      if (userLocation && locationStatus === 'granted') { resolve(); return; }
+      if (!navigator.geolocation) { setLocationStatus('denied'); resolve(); return; }
+      setLocationStatus('pending');
+      navigator.geolocation.getCurrentPosition(
+        pos => { setUserLocation([pos.coords.longitude, pos.coords.latitude]); setLocationStatus('granted'); resolve(); },
+        () => { setLocationStatus('denied'); resolve(); },
+        { timeout: 10_000 },
+      );
+    });
+
+  /**
+   * Start from nothing and add places yourself.
+   *
+   * The planner has only ever begun with a generated day, which someone then
+   * edits down — fine when the AI guesses well, and the long way round when a
+   * visitor already knows the three places they want. The editor below already
+   * does everything this needs: add a stop, reorder, set times, save. It only
+   * ever lacked an empty plan to open with.
+   */
+  const startBlank = () => {
+    setError('');
+    setTripSaved(false);
+    setPlan({
+      title: 'My Liliw Itinerary',
+      summary: 'Add the places you want to visit, in the order you want to see them.',
+      days: [{ day: 1, theme: 'Day 1', stops: [] }],
+      tips: [],
+      estimatedCostPerDay: '',
+    });
+    setStep('result');
+  };
+
+  const requestItinerary = async () => {
+    const res = await fetch('/api/plan-trip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        duration: effectiveDuration,
+        groupSize: effectiveGroupSize,
+        budget: effectiveBudget,
+        interests,
+        favoriteAttractions: selectedFavs,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.itinerary) {
+      const err = new Error(data.error || 'Failed') as Error & { status?: number };
+      err.status = res.status;
+      throw err;
+    }
+    return data.itinerary;
+  };
+
+  const generate = async () => {
+    setStep('generating');
+    setError('');
+    setTripSaved(false);
+    await captureLocation();
+    try {
+      let itinerary;
+      try {
+        itinerary = await requestItinerary();
+      } catch (err) {
+        // A cold serverless instance can take long enough on the very first
+        // request of a session to miss the platform's function timeout, even
+        // though the same request succeeds moments later once warm — the
+        // exact "fails once, works on reload" pattern this used to force on
+        // visitors. One silent retry turns that into "it just worked"
+        // instead. A 429 (rate limited) is the one failure an immediate
+        // retry can't fix, so it's left to surface as a real error.
+        if ((err as { status?: number })?.status === 429) throw err;
+        itinerary = await requestItinerary();
+      }
+      setPlan(itinerary);
+      setStep('result');
+    } catch {
+      setError('Something went wrong. Please try again.');
+      setStep('interests');
+    }
+  };
+
+  const saveTrip = async (editedPlan: GeneratedPlan) => {
+    if (!plan) return;
+    if (!user || !token) { setShowLoginModal(true); return; }
+    try {
+      const res = await fetch('/api/itineraries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          title: editedPlan.title,
+          plan: editedPlan,
+          duration: effectiveDuration,
+          budget: effectiveBudget,
+        }),
+      });
+      if (res.ok) {
+        setTripSaved(true);
+        window.dispatchEvent(new Event('liliw-trips-updated'));
+        return;
+      }
+      // A failed save used to do nothing at all — the button sat there and the
+      // trip was simply not stored. Saying so is the least this can do.
+      setError(
+        res.status === 401
+          ? 'Your session expired. Sign in again and save the trip.'
+          : 'The trip could not be saved. Please try again.',
+      );
+    } catch {
+      setError('The trip could not be saved — check your connection and try again.');
+    }
+  };
+
+  const reset = () => {
+    setStep('duration'); setDuration(''); setCustomDuration('');
+    setGroupSize(''); setCustomGroupSize('');
+    setBudget(''); setCustomBudget(''); setInterests([]);
+    setSelectedFavs([]); setPlan(null); setError(''); setTripSaved(false);
+    setUserLocation(null); setLocationStatus('idle');
+  };
+
+  const totalSteps = hasFavorites ? 5 : 4;
+  const stepNumber = step === 'duration' ? 1 : step === 'groupSize' ? 2 : step === 'budget' ? 3 : step === 'interests' ? 4 : step === 'favorites' ? 5 : null;
+  const stepLabel  = (n: number) => n === 1 ? 'Duration' : n === 2 ? 'Group' : n === 3 ? 'Budget' : n === 4 ? 'Interests' : 'Favorites';
+
+  if (!user) {
+    return (
+      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
+        <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-3">
+          <Sparkles className="w-5 h-5" style={{ color: '#F5C518' }} />
+          <h2 className="text-lg font-semibold text-gray-900" style={{ fontFamily: HL }}>Itinerary Builder</h2>
+        </div>
+        <div className="flex flex-col items-center py-14 px-8 text-center">
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center mb-4"
+            style={{ backgroundColor: 'rgba(21,101,192,0.06)' }}>
+            <LogIn className="w-5 h-5" style={{ color: '#1565C0' }} />
+          </div>
+          <h3 className="text-lg font-semibold text-gray-900 mb-1" style={{ fontFamily: HL }}>Log in to Make Itinerary</h3>
+          <p className="text-sm text-gray-400 mb-6 max-w-xs" style={{ fontFamily: BL }}>
+            Create a free account to build personalized AI trip plans and save them to your profile.
+          </p>
+          <button onClick={() => setShowLoginModal(true)}
+            className="px-6 py-2.5 rounded-xl font-bold text-sm transition hover:opacity-90"
+            style={{ backgroundColor: '#1565C0', color: '#F5C518', fontFamily: BL }}>
+            Log In / Register
+          </button>
+        </div>
+        {showLoginModal && <AuthModal defaultTab="login" onClose={() => setShowLoginModal(false)} />}
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden">
+      {/* Wizard header */}
+      <div className="px-6 pt-6 pb-4 border-b border-gray-100">
+        <div className="flex items-center gap-3 mb-1">
+          <Sparkles className="w-5 h-5" style={{ color: '#F5C518' }} />
+          <h2 className="text-xl font-bold text-gray-900" style={{ fontFamily: HL }}>Itinerary Builder</h2>
+        </div>
+        <p className="text-sm text-gray-500 ml-8" style={{ fontFamily: BL }}>Tell us your preferences — we&apos;ll build your perfect Liliw trip</p>
+      </div>
+
+      {/* Progress */}
+      {stepNumber && (
+        <div className="px-6 py-3 bg-gray-50 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            {Array.from({ length: totalSteps }, (_, i) => i + 1).map(n => (
+              <div key={n} className="flex items-center gap-2 flex-1">
+                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 transition-all ${
+                  n <= stepNumber ? 'text-white' : 'bg-gray-200 text-gray-400'
+                }`} style={n <= stepNumber ? { backgroundColor: '#1565C0', fontFamily: HL } : { fontFamily: HL }}>
+                  {n < stepNumber ? <Check className="w-3 h-3" /> : n}
+                </div>
+                {/* At five steps the labels truncate to two letters on a phone,
+                    so below sm only the numbered circles and connectors show —
+                    the current step is named in the heading below anyway. */}
+                <p className={`hidden sm:block text-xs font-medium truncate ${n === stepNumber ? 'text-gray-900' : 'text-gray-400'}`}
+                  style={{ fontFamily: BL }}>
+                  {stepLabel(n)}
+                </p>
+                {n < totalSteps && <div className="flex-1 h-px bg-gray-200 ml-1" />}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="p-6">
+        <AnimatePresence mode="wait">
+
+          {/* Step 1 â€" Duration */}
+          {step === 'duration' && (
+            <motion.div key="duration" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }}>
+              <div className="flex items-center gap-2 mb-4">
+                <Clock className="w-4 h-4" style={{ color: '#1565C0' }} />
+                <p className="font-semibold text-gray-700 text-sm" style={{ fontFamily: HL }}>How long is your trip?</p>
+              </div>
+              <div className="space-y-2">
+                {DURATIONS.map(d => (
+                  <WizardCard key={d.value} {...d} selected={duration === d.value} onClick={() => setDuration(d.value)} />
+                ))}
+              </div>
+              {duration === 'custom' && (
+                <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="mt-3">
+                  <input
+                    type="text"
+                    placeholder="e.g. 5 hours, 4 days, long weekend…"
+                    value={customDuration}
+                    onChange={e => setCustomDuration(e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl border-2 text-sm focus:outline-none"
+                    style={{ borderColor: '#1565C0', fontFamily: BL }}
+                  />
+                </motion.div>
+              )}
+              <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+                disabled={!effectiveDuration}
+                onClick={() => setStep('groupSize')}
+                className="mt-4 w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl font-bold text-sm disabled:opacity-40 disabled:cursor-not-allowed transition"
+                style={{
+                  backgroundColor: effectiveDuration ? '#1565C0' : '#9CA3AF',
+                  color: effectiveDuration ? '#F5C518' : 'white',
+                  fontFamily: BL,
+                  boxShadow: effectiveDuration ? '0 6px 20px rgba(11,61,145,0.25)' : 'none',
+                }}>
+                Next <ChevronRight className="w-4 h-4" />
+              </motion.button>
+
+              {/* For the visitor who already knows where they are going and
+                  does not need to be asked four questions first. */}
+              <button onClick={startBlank}
+                className="mt-3 w-full text-center text-xs font-semibold transition hover:opacity-70"
+                style={{ color: '#1565C0', fontFamily: BL }}>
+                Or build your own itinerary from scratch
+              </button>
+            </motion.div>
+          )}
+
+          {/* Step 2 â€" Group size */}
+          {step === 'groupSize' && (
+            <motion.div key="groupSize" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }}>
+              <div className="flex items-center gap-2 mb-4">
+                <Users className="w-4 h-4" style={{ color: '#1565C0' }} />
+                <p className="font-semibold text-gray-700 text-sm" style={{ fontFamily: HL }}>How many will tour?</p>
+              </div>
+              <div className="space-y-2">
+                {GROUP_SIZES.map(g => (
+                  <WizardCard key={g.value} {...g} selected={groupSize === g.value} onClick={() => setGroupSize(g.value)} />
+                ))}
+              </div>
+              {groupSize === 'custom' && (
+                <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="mt-3">
+                  <input
+                    type="text"
+                    placeholder="e.g. 12 people, 2 adults + 3 kids…"
+                    value={customGroupSize}
+                    onChange={e => setCustomGroupSize(e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl border-2 text-sm focus:outline-none"
+                    style={{ borderColor: '#1565C0', fontFamily: BL }}
+                  />
+                </motion.div>
+              )}
+              <div className="flex gap-2 mt-4">
+                <button onClick={() => setStep('duration')}
+                  className="shrink-0 px-4 py-3.5 rounded-2xl border-2 border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition">
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+                  disabled={!effectiveGroupSize}
+                  onClick={() => setStep('budget')}
+                  className="flex-1 flex items-center justify-center gap-2 py-3.5 rounded-2xl font-bold text-sm disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  style={{
+                    backgroundColor: effectiveGroupSize ? '#1565C0' : '#9CA3AF',
+                    color: effectiveGroupSize ? '#F5C518' : 'white',
+                    fontFamily: BL,
+                    boxShadow: effectiveGroupSize ? '0 6px 20px rgba(11,61,145,0.25)' : 'none',
+                  }}>
+                  Next <ChevronRight className="w-4 h-4" />
+                </motion.button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Step 3 â€" Budget */}
+          {step === 'budget' && (
+            <motion.div key="budget" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }}>
+              <div className="flex items-center gap-2 mb-4">
+                <Wallet className="w-4 h-4" style={{ color: '#1565C0' }} />
+                <p className="font-semibold text-gray-700 text-sm" style={{ fontFamily: HL }}>What&apos;s your budget per person/day?</p>
+              </div>
+              <div className="space-y-2">
+                {BUDGETS.map(b => (
+                  <WizardCard key={b.value} {...b} selected={budget === b.value} onClick={() => setBudget(b.value)} />
+                ))}
+              </div>
+              {budget === 'custom' && (
+                <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="mt-3">
+                  <input
+                    type="text"
+                    placeholder="e.g. ₱2,500/day, around ₱500…"
+                    value={customBudget}
+                    onChange={e => setCustomBudget(e.target.value)}
+                    className="w-full px-4 py-3 rounded-xl border-2 text-sm focus:outline-none"
+                    style={{ borderColor: '#1565C0', fontFamily: BL }}
+                  />
+                </motion.div>
+              )}
+              <div className="flex gap-2 mt-4">
+                <button onClick={() => setStep('groupSize')}
+                  className="shrink-0 px-4 py-3.5 rounded-2xl border-2 border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition">
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+                  disabled={!effectiveBudget}
+                  onClick={() => setStep('interests')}
+                  className="flex-1 flex items-center justify-center gap-2 py-3.5 rounded-2xl font-bold text-sm disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  style={{
+                    backgroundColor: effectiveBudget ? '#1565C0' : '#9CA3AF',
+                    color: effectiveBudget ? '#F5C518' : 'white',
+                    fontFamily: BL,
+                    boxShadow: effectiveBudget ? '0 6px 20px rgba(11,61,145,0.25)' : 'none',
+                  }}>
+                  Next <ChevronRight className="w-4 h-4" />
+                </motion.button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Step 4 â€" Interests */}
+          {step === 'interests' && (
+            <motion.div key="interests" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }}>
+              <div className="flex items-center gap-2 mb-4">
+                <Heart className="w-4 h-4" style={{ color: '#1565C0' }} />
+                <p className="font-semibold text-gray-700 text-sm" style={{ fontFamily: HL }}>What are you into? (pick as many as you like)</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {INTERESTS.map(({ value }) => (
+                  <InterestChip key={value} value={value}
+                    selected={interests.includes(value)} onClick={() => toggleInterest(value)} />
+                ))}
+              </div>
+
+              {interests.length > 0 && (
+                <div className="mt-4">
+                  {!userLocation ? (
+                    <button onClick={captureLocation} disabled={locationStatus === 'pending'}
+                      className="flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-xl border border-blue-200 text-blue-700 bg-blue-50 hover:bg-blue-100 transition disabled:opacity-60"
+                      style={{ fontFamily: BL }}>
+                      <MapPin className="w-3.5 h-3.5" />
+                      {locationStatus === 'pending' ? 'Finding your location…' : "See what's closest to you"}
+                    </button>
+                  ) : nearestMatches.length > 0 ? (
+                    <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4">
+                      <p className="text-xs font-semibold text-blue-900 mb-2.5 flex items-center gap-1.5" style={{ fontFamily: HL }}>
+                        <MapPin className="w-3.5 h-3.5" /> Closest to your current location
+                      </p>
+                      <div className="flex flex-col gap-2">
+                        {nearestMatches.map(n => {
+                          const picked = selectedFavs.includes(n.name);
+                          return (
+                            <div key={n.id} className="flex items-center justify-between gap-3 bg-white rounded-xl px-3 py-2 border border-blue-100/80">
+                              <div className="min-w-0">
+                                <p className="text-sm font-semibold text-gray-800 truncate" style={{ fontFamily: HL }}>{n.name}</p>
+                                <p className="text-xs text-gray-500" style={{ fontFamily: BL }}>
+                                  {n.distanceKm < 1 ? `${Math.round(n.distanceKm * 1000)} m away` : `${n.distanceKm.toFixed(1)} km away`}
+                                </p>
+                              </div>
+                              <button onClick={() => toggleFav(n.name)}
+                                className={`shrink-0 text-xs font-bold px-3 py-1.5 rounded-full transition ${
+                                  picked ? 'bg-rose-100 text-rose-600' : 'bg-blue-600 text-white hover:bg-blue-700'
+                                }`} style={{ fontFamily: BL }}>
+                                {picked ? 'Added ✓' : 'Add as a stop'}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-400" style={{ fontFamily: BL }}>
+                      No published spot matching these interests yet — the AI will still plan around them.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {error && (
+                <p className="mt-3 text-sm text-red-500 bg-red-50 rounded-xl px-4 py-3" style={{ fontFamily: BL }}>{error}</p>
+              )}
+              <div className="flex gap-2 mt-4">
+                <button onClick={() => setStep('budget')}
+                  className="shrink-0 px-4 py-3.5 rounded-2xl border-2 border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition">
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+                  disabled={interests.length === 0}
+                  onClick={afterInterests}
+                  className="flex-1 flex items-center justify-center gap-2 py-3.5 rounded-2xl font-bold text-sm disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  style={{
+                    backgroundColor: interests.length > 0 ? '#1565C0' : '#9CA3AF',
+                    color: interests.length > 0 ? '#F5C518' : 'white',
+                    fontFamily: BL,
+                    boxShadow: interests.length > 0 ? '0 6px 20px rgba(11,61,145,0.25)' : 'none',
+                  }}>
+                  {hasFavorites
+                    ? <><ChevronRight className="w-4 h-4" /> Next</>
+                    : <><Sparkles className="w-4 h-4" /> Generate My Itinerary</>}
+                </motion.button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Step 5 â€" Favorites */}
+          {step === 'favorites' && (
+            <motion.div key="favorites" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }}>
+              <div className="flex items-center gap-2 mb-1">
+                <Heart className="w-4 h-4 text-rose-500" />
+                <p className="font-semibold text-gray-700 text-sm" style={{ fontFamily: HL }}>Include your saved favorites?</p>
+              </div>
+              <p className="text-xs text-gray-400 mb-4 ml-6" style={{ fontFamily: BL }}>Select which favorites the AI should prioritize in your itinerary</p>
+              <div className="flex flex-col gap-2 mb-4">
+                {favorites.map(fav => {
+                  const picked = selectedFavs.includes(fav.name);
+                  return (
+                    <motion.button key={fav.id} whileTap={{ scale: 0.97 }}
+                      onClick={() => toggleFav(fav.name)}
+                      className={`flex items-center gap-3 px-4 py-3 rounded-2xl border-2 text-left transition-all ${
+                        picked ? 'border-rose-400 bg-rose-50' : 'border-gray-200 bg-white hover:border-gray-300'
+                      }`}>
+                      <Heart className={`w-4 h-4 shrink-0 ${picked ? 'fill-rose-500 text-rose-500' : 'text-gray-300'}`} />
+                      <div className="flex-1 min-w-0">
+                        <p className={`font-semibold text-sm truncate ${picked ? 'text-rose-700' : 'text-gray-800'}`}
+                          style={{ fontFamily: HL }}>{fav.name}</p>
+                        <p className="text-xs text-gray-400 capitalize" style={{ fontFamily: BL }}>
+                          {fav.type === 'heritage' ? 'Heritage' : fav.type === 'dining' ? 'Dining' : fav.type === 'footwear' ? 'Footwear Store' : fav.type === 'stay' ? 'Accommodations' : 'Tourist Spot'}
+                        </p>
+                      </div>
+                      {picked && (
+                        <div className="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: '#f43f5e' }}>
+                          <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                          </svg>
+                        </div>
+                      )}
+                    </motion.button>
+                  );
+                })}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setStep('interests')}
+                  className="shrink-0 px-4 py-3.5 rounded-2xl border-2 border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition">
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+                  onClick={generate}
+                  className="flex-1 flex items-center justify-center gap-2 py-3.5 rounded-2xl font-bold text-sm transition"
+                  style={{ backgroundColor: '#1565C0', color: '#F5C518', fontFamily: BL, boxShadow: '0 6px 20px rgba(11,61,145,0.25)' }}>
+                  <Sparkles className="w-4 h-4" />
+                  {selectedFavs.length > 0 ? `Generate with ${selectedFavs.length} favorite${selectedFavs.length > 1 ? 's' : ''}` : 'Generate My Itinerary'}
+                </motion.button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Generating */}
+          {step === 'generating' && (
+            <motion.div key="generating" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="flex flex-col items-center justify-center py-16 text-center">
+              <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1.2, ease: 'linear' }}
+                className="w-12 h-12 rounded-full border-4 mb-5"
+                style={{ borderColor: '#F5C518', borderTopColor: 'transparent' }} />
+              <h3 className="text-lg font-bold text-gray-900 mb-2" style={{ fontFamily: HL }}>
+                {locationStatus === 'pending' ? 'Getting your location…' : 'Building your itinerary…'}
+              </h3>
+              <p className="text-sm text-gray-500 max-w-xs" style={{ fontFamily: BL }}>
+                {locationStatus === 'pending'
+                  ? 'Allow location so your route can start from where you are — you can skip this and we’ll start from your first stop.'
+                  : 'Crafting a personalized plan using real Liliw attractions. Just a moment!'}
+              </p>
+            </motion.div>
+          )}
+
+          {/* Result */}
+          {step === 'result' && plan && (
+            <motion.div key="result" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+              <PlanResult plan={plan} onReset={reset} onSave={saveTrip} saved={tripSaved} isLoggedIn={!!user} interests={interests}
+                duration={effectiveDuration} userLocation={userLocation} locationStatus={locationStatus} />
+            </motion.div>
+          )}
+
+        </AnimatePresence>
+      </div>
+
+      {showLoginModal && (
+        <AuthModal
+          defaultTab="login"
+          message="Log in to save this itinerary to your profile."
+          onClose={() => setShowLoginModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════
+   PART 2 â€" STRAPI ITINERARIES FROM DATABASE
+   ══════════════════════════════════════════════════════════ */
+
+const DURATION_LABEL: Record<string, string> = {
+  'half-day': '4 hours', 'one-day': '8 hours', 'two-day': '2 days',
+  heritage: 'Heritage', foodie: 'Foodie', family: 'Family',
+};
+
+/**
+ * The CMS asks an editor for a number of days; the filter tabs below work in
+ * bands. One day is a full day, anything longer is multi-day, and a blank or
+ * zero count means a short visit.
+ */
+function durationBand(days: unknown): string {
+  const n = Number(days);
+  if (!Number.isFinite(n) || n <= 0) return 'half-day';
+  if (n === 1) return 'one-day';
+  return 'two-day';
+}
+
+/**
+ * Rich text out of the CMS is one item per line, sometimes wrapped in markup.
+ * Strapi supplied arrays, so this bridges the two without the page needing to
+ * know which source an itinerary came from.
+ */
+function toLines(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter(Boolean).map(String);
+  if (typeof value !== 'string') return [];
+  return value
+    .replace(/<\/(p|div|li|h[1-6])>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .split('\n')
+    .map(s => s.replace(/^[\s•\-*]+/, '').trim())
+    .filter(Boolean);
+}
+const FILTER_TABS = [
+  { key: 'all', label: 'All' }, { key: 'half-day', label: 'Half-Day' },
+  { key: 'one-day', label: 'Full Day' }, { key: 'two-day', label: '2 Days' },
+  { key: 'heritage', label: 'Heritage' }, { key: 'nature', label: 'Nature' },
+  { key: 'foodie', label: 'Foodie' }, { key: 'family', label: 'Family' },
+];
+
+/** Which tabs are a theme rather than a length, so the filter knows what to compare. */
+const THEME_KEYS = new Set(['heritage', 'nature', 'foodie', 'family']);
+const DIFF: Record<string, { label: string; badge: string }> = {
+  easy:      { label: 'Easy',      badge: 'bg-green-100 text-green-700' },
+  moderate:  { label: 'Moderate',  badge: 'bg-yellow-100 text-yellow-700' },
+  difficult: { label: 'Difficult', badge: 'bg-red-100 text-red-700' },
+};
+
+/**
+ * A curated tour's stops, read from the highlights field.
+ *
+ * cms_itineraries has no per-stop table, so a stop is one highlight line in
+ * the form `TIME | PLACE | NOTE`. Staff edit it as ordinary rich text in the
+ * CMS, and the place has to match an approved attraction by name for the map
+ * to pin it. A line in any other shape is still shown as a plain highlight,
+ * which is what every older itinerary is made of.
+ */
+function parseStopLines(highlights: string[]): { time: string; place: string; note: string }[] {
+  return highlights
+    .map(line => line.split('|').map(part => part.trim()))
+    .filter(parts => parts.length >= 2 && parts[1])
+    .map(parts => ({ time: parts[0] ?? '', place: parts[1], note: parts.slice(2).join(' | ') }));
+}
+
+interface Itinerary {
+  id: string; title: string; duration: string; difficulty: string;
+  description: string; category: string; stopsBlocks: any; highlights: string[];
+  included: string[]; not_included: string[]; meeting_point?: string;
+  price?: number; max_participants?: number;
+  cover_photo?: string | null; photos: string[];
+}
+
+function renderLeaf(leaf: any, i: number): React.ReactNode {
+  let node: React.ReactNode = leaf.text;
+  if (leaf.bold)          node = <strong key={i}>{node}</strong>;
+  if (leaf.italic)        node = <em key={i}>{node}</em>;
+  if (leaf.underline)     node = <u key={i}>{node}</u>;
+  if (leaf.strikethrough) node = <s key={i}>{node}</s>;
+  return <span key={i}>{node}</span>;
+}
+
+function StrapiBlocks({ blocks }: { blocks: any }) {
+  if (!Array.isArray(blocks) || blocks.length === 0) return null;
+  const children = (arr: any[]) => (arr || []).map((c, i) => renderLeaf(c, i));
+  return (
+    <div className="space-y-2">
+      {blocks.map((block: any, i: number) => {
+        switch (block.type) {
+          case 'paragraph': return (
+            <p key={i} className="text-sm text-gray-700 leading-relaxed" style={{ fontFamily: BL }}>
+              {children(block.children)}
+            </p>
+          );
+          case 'heading': return (
+            <div key={i} role="heading" aria-level={block.level || 2} className="text-sm font-bold text-gray-900 mt-2"
+              style={{ fontFamily: HL }}>
+              {children(block.children)}
+            </div>
+          );
+          case 'list':
+            return block.format === 'ordered'
+              ? <ol key={i} className="list-none space-y-2">{(block.children || []).map((item: any, j: number) => (
+                  <li key={j} className="flex gap-3 text-sm text-gray-700" style={{ fontFamily: BL }}>
+                    <span className="shrink-0 w-6 h-6 rounded-full text-white text-xs font-bold flex items-center justify-center mt-0.5"
+                      style={{ backgroundColor: '#1565C0', fontFamily: HL }}>{j + 1}</span>
+                    <span className="pt-0.5">{children(item.children)}</span>
+                  </li>
+                ))}</ol>
+              : <ul key={i} className="space-y-1.5">{(block.children || []).map((item: any, j: number) => (
+                  <li key={j} className="flex items-start gap-2 text-sm text-gray-700" style={{ fontFamily: BL }}>
+                    <span className="shrink-0 font-bold mt-0.5" style={{ color: '#F5C518' }}>→</span>
+                    <span>{children(item.children)}</span>
+                  </li>
+                ))}</ul>;
+          default: return null;
+        }
+      })}
+    </div>
+  );
+}
+
+function PhotoGallery({ photos, title }: { photos: string[]; title: string }) {
+  const [active, setActive] = useState(0);
+  if (photos.length === 0) return null;
+  return (
+    <div>
+      <div className="relative aspect-video rounded-xl overflow-hidden mb-2">
+        <AnimatePresence mode="wait">
+          <motion.div key={active} initial={{ opacity: 0, scale: 1.04 }} animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.98 }} transition={{ duration: 0.35 }} className="absolute inset-0">
+            <img src={photos[active]} alt={`${title} photo ${active + 1}`} className="absolute inset-0 w-full h-full object-cover" />
+          </motion.div>
+        </AnimatePresence>
+        {photos.length > 1 && (
+          <>
+            <button onClick={() => setActive(p => (p - 1 + photos.length) % photos.length)}
+              className="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 text-white flex items-center justify-center hover:bg-black/60 transition">
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button onClick={() => setActive(p => (p + 1) % photos.length)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/40 text-white flex items-center justify-center hover:bg-black/60 transition">
+              <ChevronRight className="w-4 h-4" />
+            </button>
+            <div className="absolute bottom-2 inset-x-0 flex justify-center gap-1.5">
+              {photos.map((_, i) => (
+                <button key={i} onClick={() => setActive(i)}
+                  className={`h-1.5 rounded-full transition-all ${i === active ? 'bg-white w-4' : 'bg-white/50 w-1.5'}`} />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+      {photos.length > 1 && (
+        <div className="flex gap-1.5 overflow-x-auto pb-1">
+          {photos.map((src, i) => (
+            <button key={i} onClick={() => setActive(i)}
+              className={`shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition ${i === active ? 'opacity-100' : 'border-transparent opacity-60 hover:opacity-90'}`}
+              style={i === active ? { borderColor: '#F5C518' } : {}}>
+              <img src={src} alt="" className="w-full h-full object-cover" />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DetailModal({ itin, onClose }: { itin: Itinerary; onClose: () => void }) {
+  // Stops parsed out of highlights, matched to approved attractions so each
+  // one can be pinned. Fetched here rather than passed down: the modal is the
+  // only place that needs coordinates, and it opens one tour at a time.
+  const parsedStops = useMemo(() => parseStopLines(itin.highlights), [itin.highlights]);
+  const mapped = useMappedStops(parsedStops);
+
+  const diff = DIFF[itin.difficulty] || { label: itin.difficulty, badge: 'bg-gray-100 text-gray-600' };
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = ''; };
+  }, []);
+
+  return (
+    <motion.div key="detail-modal" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-60 flex items-end sm:items-center justify-center">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <motion.div initial={{ y: 80, opacity: 0, scale: 0.97 }} animate={{ y: 0, opacity: 1, scale: 1 }}
+        exit={{ y: 80, opacity: 0, scale: 0.95 }} transition={{ type: 'spring', stiffness: 340, damping: 30 }}
+        className="relative z-10 bg-white w-full sm:max-w-2xl sm:rounded-3xl rounded-t-3xl overflow-hidden flex flex-col"
+        style={{ maxHeight: '92vh' }}>
+        {itin.cover_photo && (
+          <div className="relative shrink-0 h-52">
+            <img src={itin.cover_photo} alt={itin.title} className="absolute inset-0 w-full h-full object-cover" />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
+            <div className="absolute bottom-4 left-5 right-14">
+              <h2 className="text-2xl font-bold text-white leading-tight" style={{ fontFamily: DL }}>{itin.title}</h2>
+            </div>
+          </div>
+        )}
+        <button onClick={onClose} className="absolute top-4 right-4 z-20 p-2 rounded-full bg-white/90 hover:bg-white shadow transition">
+          <X className="w-4 h-4 text-gray-700" />
+        </button>
+        <div className="flex-1 overflow-y-auto">
+          <div className="px-6 pt-5 pb-8 space-y-7">
+            {!itin.cover_photo && (
+              <h2 className="text-2xl font-bold text-gray-900 leading-tight" style={{ fontFamily: DL }}>{itin.title}</h2>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <span className="inline-flex items-center gap-1.5 text-sm font-semibold px-3 py-1 rounded-full border"
+                style={{ backgroundColor: 'rgba(11,61,145,0.07)', color: '#1565C0', borderColor: 'rgba(11,61,145,0.2)', fontFamily: BL }}>
+                <Clock className="w-3.5 h-3.5" />{DURATION_LABEL[itin.duration] || itin.duration}
+              </span>
+              <span className={`inline-flex items-center gap-1 text-xs font-bold px-3 py-1 rounded-full ${diff.badge}`}
+                style={{ fontFamily: HL }}>
+                <Star className="w-3 h-3" />{diff.label}
+              </span>
+              {itin.max_participants && (
+                <span className="inline-flex items-center gap-1.5 bg-gray-100 text-gray-600 text-xs font-semibold px-3 py-1 rounded-full"
+                  style={{ fontFamily: BL }}>
+                  <Users className="w-3.5 h-3.5" />Max {itin.max_participants} pax
+                </span>
+              )}
+              {itin.meeting_point && (
+                <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-full border"
+                  style={{ backgroundColor: 'rgba(245,197,24,0.1)', color: '#1565C0', borderColor: 'rgba(245,197,24,0.3)', fontFamily: BL }}>
+                  <MapPin className="w-3.5 h-3.5" />{itin.meeting_point}
+                </span>
+              )}
+            </div>
+            {itin.description && (
+              <div>
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3" style={{ fontFamily: HL }}>About this tour</p>
+                <SafeHtml html={itin.description} className="prose prose-sm max-w-none text-gray-600 leading-relaxed" style={{ fontFamily: BL }} />
+              </div>
+            )}
+            {itin.photos.length > 0 && (
+              <div>
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3" style={{ fontFamily: HL }}>Photos</p>
+                <PhotoGallery photos={itin.photos} title={itin.title} />
+              </div>
+            )}
+            {Array.isArray(itin.stopsBlocks) && itin.stopsBlocks.length > 0 && (
+              <div>
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-2" style={{ fontFamily: HL }}>
+                  <Navigation className="w-4 h-4" style={{ color: '#1565C0' }} /> Itinerary Schedule
+                </p>
+                <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
+                  <StrapiBlocks blocks={itin.stopsBlocks} />
+                </div>
+              </div>
+            )}
+            {parsedStops.length > 0 && (
+              <div>
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-2" style={{ fontFamily: HL }}>
+                  <Navigation className="w-4 h-4" style={{ color: '#1565C0' }} /> The route
+                </p>
+
+                {mapped.length > 0 && (
+                  <div className="mb-4">
+                    <ItineraryMap stops={mapped} />
+                    {mapped.length < parsedStops.length && (
+                      <p className="text-xs text-gray-400 mt-1.5" style={{ fontFamily: BL }}>
+                        {parsedStops.length - mapped.length} stop
+                        {parsedStops.length - mapped.length === 1 ? '' : 's'} could not be placed on the map.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* The same stops as a checklist, ticked by the visit record
+                    rather than by hand. Above the read-only schedule, so
+                    someone partway through a tour sees where they are before
+                    they see the times. */}
+                {mapped.length > 0 && (
+                  <div className="mb-4">
+                    <ItineraryChecklist stops={mapped} />
+                  </div>
+                )}
+
+                <ol className="space-y-3">
+                  {parsedStops.map((st, i) => (
+                    <li key={i} className="flex gap-3">
+                      <span className="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold text-white mt-0.5"
+                        style={{ backgroundColor: '#0B3D91' }}>{i + 1}</span>
+                      <div className="min-w-0">
+                        <div className="flex items-baseline gap-2 flex-wrap">
+                          {st.time && (
+                            <span className="text-xs font-bold px-2 py-0.5 rounded-full"
+                              style={{ backgroundColor: 'rgba(245,197,24,0.15)', color: '#1565C0', fontFamily: HL }}>
+                              {st.time}
+                            </span>
+                          )}
+                          <span className="font-bold text-gray-900 text-sm" style={{ fontFamily: HL }}>{st.place}</span>
+                        </div>
+                        {st.note && (
+                          <p className="text-sm text-gray-600 mt-0.5 leading-relaxed" style={{ fontFamily: BL }}>{st.note}</p>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+
+            {parsedStops.length === 0 && itin.highlights.length > 0 && (
+              <div>
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3" style={{ fontFamily: HL }}>Highlights</p>
+                <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {itin.highlights.map((h, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-gray-700" style={{ fontFamily: BL }}>
+                      <span className="shrink-0 mt-0.5 w-5 h-5 rounded-full flex items-center justify-center"
+                        style={{ backgroundColor: 'rgba(11,61,145,0.1)' }}>
+                        <ArrowRight className="w-3 h-3" style={{ color: '#1565C0' }} />
+                      </span>{h}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {(itin.included.length > 0 || itin.not_included.length > 0) && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {itin.included.length > 0 && (
+                  <div className="bg-green-50 rounded-xl p-4 border border-green-100">
+                    <p className="text-xs font-bold text-green-700 uppercase tracking-wide mb-2" style={{ fontFamily: HL }}>Included</p>
+                    <ul className="space-y-1.5">
+                      {itin.included.map((item, i) => (
+                        <li key={i} className="flex items-start gap-2 text-sm text-gray-700" style={{ fontFamily: BL }}>
+                          <CheckCircle className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />{item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {itin.not_included.length > 0 && (
+                  <div className="bg-red-50 rounded-xl p-4 border border-red-100">
+                    <p className="text-xs font-bold text-red-600 uppercase tracking-wide mb-2" style={{ fontFamily: HL }}>Not Included</p>
+                    <ul className="space-y-1.5">
+                      {itin.not_included.map((item, i) => (
+                        <li key={i} className="flex items-start gap-2 text-sm text-gray-700" style={{ fontFamily: BL }}>
+                          <XCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />{item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+        {itin.price && (
+          <div className="shrink-0 px-6 py-4 border-t border-gray-100 bg-white flex items-center gap-3"
+            style={{ boxShadow: '0 -4px 24px rgba(0,0,0,.07)' }}>
+            <Calendar className="w-4 h-4 text-gray-400" />
+            <div>
+              <p className="text-2xl font-bold text-gray-900" style={{ fontFamily: DL }}>₱{Number(itin.price).toLocaleString()}</p>
+              <p className="text-xs text-gray-400" style={{ fontFamily: BL }}>per person</p>
+            </div>
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function DatabaseItineraries() {
+  const [itineraries, setItineraries] = useState<Itinerary[]>([]);
+  const [loading, setLoading]         = useState(true);
+  const [filter, setFilter]           = useState('all');
+  const [detail, setDetail]           = useState<Itinerary | null>(null);
+
+  useEffect(() => {
+    fetch('/api/content/itineraries').then(r => r.json()).then(json => {
+      const data: any[] = json.data ?? [];
+      setItineraries(data.map((item: any) => {
+        const a = item.attributes || item;
+        const rawPhotos = a.photos?.data || a.photos || [];
+        const photoList: string[] = (Array.isArray(rawPhotos) ? rawPhotos : [])
+          .map((p: any) => getPhotoUrl(p.attributes || p)).filter(Boolean) as string[];
+        return {
+          id:               String(item.id || item.documentId || Math.random()),
+          title:            a.title,
+          // The CMS stores a day count; this page filters on a duration band.
+          // Without the translation every CMS itinerary fell back to
+          // 'half-day' and the filter tabs sorted them all into one pile.
+          duration:         a.duration || durationBand(a.duration_days),
+          difficulty:       a.difficulty  || 'easy',
+          // Without this the theme tabs had nothing to match on, so Heritage,
+          // Foodie and Family were tabs that always came back empty.
+          category:         String(a.category ?? '').toLowerCase(),
+          description:      blocksToText(a.description),
+          stopsBlocks:      Array.isArray(a.stops) ? a.stops : [],
+          // The CMS writes highlights as rich text, one per line, while this
+          // page was built against Strapi's array. Without splitting it, an
+          // itinerary published from the CMS showed no highlights at all.
+          highlights:       toLines(a.highlights),
+          included:         Array.isArray(a.included)     ? a.included     : [],
+          not_included:     Array.isArray(a.not_included) ? a.not_included : [],
+          meeting_point:    a.meeting_point || undefined,
+          price:            a.price            || undefined,
+          max_participants: a.max_participants  || undefined,
+          cover_photo:      getPhotoUrl(a.cover_photo?.data?.attributes || a.cover_photo?.attributes || a.cover_photo),
+          photos:           photoList,
+        };
+      }));
+    }).finally(() => setLoading(false));
+  }, []);
+
+  const onClose = useCallback(() => setDetail(null), []);
+  // Length tabs compare the duration band; theme tabs compare the category.
+  // One list compared against `duration` for both, which is why every theme tab
+  // showed nothing however many tours matched it.
+  const filtered = filter === 'all'
+    ? itineraries
+    : itineraries.filter(i => THEME_KEYS.has(filter) ? i.category === filter : i.duration === filter);
+
+  return (
+    <div>
+      {/* Section header */}
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="text-xl font-bold text-gray-900" style={{ fontFamily: HL }}>Curated Itineraries</h2>
+          <p className="text-sm text-gray-500" style={{ fontFamily: BL }}>Hand-picked tours from our local team</p>
+        </div>
+      </div>
+
+      {/* Filter tabs */}
+      <div className="flex gap-2 overflow-x-auto pb-2 mb-6 scrollbar-hide">
+        {FILTER_TABS.map(({ key, label }) => (
+          <button key={key} onClick={() => setFilter(key)}
+            className="shrink-0 px-4 py-1.5 rounded-full text-sm font-semibold transition-all"
+            style={filter === key
+              ? { backgroundColor: '#1565C0', color: '#F5C518', fontFamily: HL }
+              : { backgroundColor: '#F3F4F6', color: '#6B7280', fontFamily: HL }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Cards */}
+      {loading ? (
+        <div className="flex justify-center py-16">
+          <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2" style={{ borderColor: '#F5C518' }} />
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="flex flex-col items-center py-16 text-center">
+          <MapPin className="w-12 h-12 mb-4 opacity-20" style={{ color: '#1565C0' }} />
+          <h3 className="text-lg font-bold text-gray-400 mb-1" style={{ fontFamily: HL }}>
+            {itineraries.length === 0 ? 'No itineraries yet' : 'No matches for this filter'}
+          </h3>
+          <p className="text-sm text-gray-400 max-w-xs" style={{ fontFamily: BL }}>
+            {itineraries.length === 0
+              ? 'Publish tour packages in the CMS and they will appear here.'
+              : 'Try a different filter above.'}
+          </p>
+        </div>
+      ) : (
+        <motion.div initial="hidden" animate="visible"
+          variants={{ visible: { transition: { staggerChildren: 0.07 } } }}
+          className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {filtered.map(itin => {
+            const diff = DIFF[itin.difficulty] || { label: itin.difficulty, badge: 'bg-gray-100 text-gray-600' };
+            return (
+              <motion.div key={itin.id}
+                variants={{ hidden: { y: 24, opacity: 0 }, visible: { y: 0, opacity: 1, transition: { duration: 0.38 } } }}
+                className="group bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-lg transition-shadow overflow-hidden flex flex-col cursor-pointer"
+                onClick={() => setDetail(itin)}>
+                <div className="relative h-44 shrink-0"
+                  style={{ background: 'linear-gradient(135deg,rgba(21,101,192,0.06),rgba(21,101,192,0.05))' }}>
+                  {itin.cover_photo
+                    ? <img src={itin.cover_photo} alt={itin.title} className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                    : <div className="absolute inset-0 flex items-center justify-center opacity-20">
+                        <MapPin className="w-16 h-16" style={{ color: '#1565C0' }} />
+                      </div>
+                  }
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent" />
+                  {itin.price && (
+                    <div className="absolute top-3 right-3 bg-white/95 backdrop-blur-sm rounded-xl px-3 py-1.5 shadow">
+                      <p className="text-xs text-gray-400 leading-none" style={{ fontFamily: BL }}>from</p>
+                      <p className="text-base font-bold leading-tight" style={{ color: '#1565C0', fontFamily: HL }}>
+                        ₱{Number(itin.price).toLocaleString()}
+                      </p>
+                    </div>
+                  )}
+                </div>
+                <div className="p-5 flex flex-col flex-1">
+                  <h3 className="text-base font-bold text-gray-900 mb-2 leading-snug group-hover:text-blue-700 transition-colors"
+                    style={{ fontFamily: HL }}>{itin.title}</h3>
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-gray-500" style={{ fontFamily: BL }}>
+                      <Clock className="w-3.5 h-3.5" style={{ color: '#1565C0' }} />{DURATION_LABEL[itin.duration] || itin.duration}
+                    </span>
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold ${diff.badge}`}
+                      style={{ fontFamily: HL }}>{diff.label}</span>
+                  </div>
+                  {itin.description && (
+                    <p className="text-xs text-gray-500 leading-relaxed line-clamp-2 flex-1 mb-4" style={{ fontFamily: BL }}>
+                      {stripHtml(itin.description)}
+                    </p>
+                  )}
+                  <div className="flex items-center justify-between mt-auto pt-3 border-t border-gray-100">
+                    <span className="text-xs text-gray-400 font-medium" style={{ fontFamily: BL }}>
+                      {itin.max_participants ? `Max ${itin.max_participants} pax` : 'Open group'}
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-xs font-bold" style={{ color: '#1565C0', fontFamily: HL }}>
+                      View details <ChevronRight className="w-3.5 h-3.5" />
+                    </span>
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })}
+        </motion.div>
+      )}
+
+      <AnimatePresence>
+        {detail && <DetailModal itin={detail} onClose={onClose} />}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════
+   MAIN PAGE
+   ══════════════════════════════════════════════════════════ */
+
+/**
+ * A saved trip in full, with its route on a map.
+ *
+ * Saved trips could only be read in the accordion on this page, a day at a
+ * time with no sense of where any of it is. This is the same view a curated
+ * tour opens into, so the two read alike whichever one a visitor saved.
+ */
+function SavedTripModal({ trip, onClose }: { trip: SavedTrip; onClose: () => void }) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  const allStops = useMemo(
+    () => (trip.plan.days ?? []).flatMap(d =>
+      (d.stops ?? []).map(st => ({ place: st.place, time: st.time, note: st.activity })),
+    ),
+    [trip],
+  );
+  const mapped = useMappedStops(allStops);
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <motion.div initial={{ scale: 0.94, y: 16 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.96, y: 8 }}
+        className="relative bg-white rounded-3xl w-full max-w-2xl max-h-[88vh] overflow-y-auto shadow-2xl">
+        <div className="sticky top-0 z-10 px-6 py-4 flex items-start justify-between gap-3 border-b border-gray-100 bg-white">
+          <div className="min-w-0">
+            <h2 className="text-lg font-bold text-gray-900 truncate" style={{ fontFamily: HL }}>{trip.title}</h2>
+            <p className="text-xs text-gray-400" style={{ fontFamily: BL }}>
+              {trip.duration}{trip.budget ? ` · ${trip.budget}` : ''} · saved {new Date(trip.savedAt).toLocaleDateString()}
+            </p>
+          </div>
+          <button onClick={onClose} className="shrink-0 p-2 rounded-full hover:bg-gray-100 transition">
+            <X className="w-4 h-4 text-gray-500" />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-5">
+          {mapped.length > 0 && <ItineraryMap stops={mapped} height={280} />}
+          {mapped.length > 0 && <ItineraryChecklist stops={mapped} />}
+          {mapped.length > 0 && <ItineraryChecklist stops={mapped} />}
+
+          {(trip.plan.days ?? []).map((day, di) => (
+            <div key={di}>
+              <p className="text-xs font-bold uppercase tracking-widest mb-3" style={{ color: '#1565C0', fontFamily: HL }}>
+                Day {day.day}{day.theme ? ` · ${day.theme}` : ''}
+              </p>
+              <ol className="space-y-3">
+                {(day.stops ?? []).map((st, i) => (
+                  <li key={i} className="flex gap-3">
+                    <span className="shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold text-white mt-0.5"
+                      style={{ backgroundColor: '#0B3D91' }}>{i + 1}</span>
+                    <div className="min-w-0">
+                      <div className="flex items-baseline gap-2 flex-wrap">
+                        {st.time && (
+                          <span className="text-xs font-bold px-2 py-0.5 rounded-full"
+                            style={{ backgroundColor: 'rgba(245,197,24,0.15)', color: '#1565C0', fontFamily: HL }}>{st.time}</span>
+                        )}
+                        <span className="font-bold text-gray-900 text-sm" style={{ fontFamily: HL }}>{st.place}</span>
+                      </div>
+                      {st.activity && <p className="text-sm text-gray-600 mt-0.5 leading-relaxed" style={{ fontFamily: BL }}>{st.activity}</p>}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ))}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function SavedTripsSection() {
+  const { user, token } = useAuth();
+  const [trips, setTrips]       = useState<SavedTrip[]>([]);
+  const [open, setOpen]         = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [mapTrip, setMapTrip] = useState<SavedTrip | null>(null);
+  const [sharingId, setSharingId]   = useState<string | null>(null);
+  const [copiedId, setCopiedId]     = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await fetch('/api/itineraries', { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) {
+        const data = await res.json();
+        setTrips((data.trips || []).map((row: any) => ({
+          id: row.id, savedAt: row.saved_at, title: row.title, plan: row.plan, duration: row.duration, budget: row.budget,
+          isPublic: !!row.is_public,
+        })));
+      }
+    } catch {}
+  }, [token]);
+
+  useEffect(() => {
+    reload();
+    window.addEventListener('liliw-trips-updated', reload);
+    return () => window.removeEventListener('liliw-trips-updated', reload);
+  }, [reload]);
+
+  if (!user || trips.length === 0) return null;
+
+  /**
+   * The row is removed first so the list responds immediately, and put back if
+   * the delete did not actually happen. Without that the trip vanished from
+   * the screen, stayed in the database, and returned on the next reload — the
+   * user is told it is gone when it is not.
+   */
+  const deleteTrip = async (id: string) => {
+    const previous = trips;
+    setTrips(prev => prev.filter(t => t.id !== id));
+    if (expandedId === id) setExpandedId(null);
+    try {
+      const res = await fetch(`/api/itineraries?id=${encodeURIComponent(id)}`, {
+        method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) setTrips(previous);
+    } catch {
+      setTrips(previous);
+    }
+  };
+
+  /**
+   * Make a trip public (if it isn't already) and copy its share link. The trip
+   * stays public after the first share so the link keeps working — a second
+   * click just re-copies. Owner-only; the PATCH is scoped to the signed-in user.
+   */
+  const shareTrip = async (trip: SavedTrip) => {
+    setSharingId(trip.id);
+    try {
+      let isPublic = trip.isPublic;
+      if (!isPublic) {
+        const res = await fetch(`/api/itineraries?id=${encodeURIComponent(trip.id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ isPublic: true }),
+        });
+        if (!res.ok) return;
+        isPublic = true;
+        setTrips(prev => prev.map(t => t.id === trip.id ? { ...t, isPublic: true } : t));
+      }
+
+      const url = `${window.location.origin}/trips/${trip.id}`;
+      try {
+        await navigator.clipboard.writeText(url);
+      } catch {
+        // Clipboard blocked (older browser / insecure context) — fall back to
+        // the native share sheet or a prompt so the link is never lost.
+        if (navigator.share) { try { await navigator.share({ title: trip.title, url }); } catch {} }
+        else window.prompt('Copy this link to share your itinerary:', url);
+      }
+      setCopiedId(trip.id);
+      setTimeout(() => setCopiedId(c => (c === trip.id ? null : c)), 2200);
+    } finally {
+      setSharingId(null);
+    }
+  };
+
+  return (
+    <section>
+      <motion.button onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-5 py-4 rounded-2xl bg-white border border-gray-200 shadow-sm hover:shadow-md transition">
+        <span className="flex items-center gap-3">
+          <BookmarkCheck className="w-5 h-5" style={{ color: '#1565C0' }} />
+          <span className="font-bold text-gray-900" style={{ fontFamily: HL }}>My Saved Trips</span>
+          <span className="text-xs font-bold px-2.5 py-0.5 rounded-full"
+            style={{ backgroundColor: '#1565C0', color: '#F5C518', fontFamily: HL }}>{trips.length}</span>
+        </span>
+        <ChevronDown className={`w-5 h-5 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </motion.button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
+            className="overflow-hidden">
+            <div className="pt-3 space-y-3">
+              {trips.map(trip => (
+                <div key={trip.id} className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+                  <div className="flex items-center gap-3 px-5 py-4 cursor-pointer"
+                    onClick={() => setExpandedId(prev => prev === trip.id ? null : trip.id)}>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-gray-900 text-sm truncate" style={{ fontFamily: HL }}>{trip.title}</p>
+                      <p className="text-xs text-gray-400 mt-0.5" style={{ fontFamily: BL }}>
+                        {trip.duration} · {new Date(trip.savedAt).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </p>
+                    </div>
+                    <button onClick={(e) => { e.stopPropagation(); deleteTrip(trip.id); }}
+                      className="p-1.5 rounded-lg text-gray-300 hover:text-red-400 hover:bg-red-50 transition">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                    <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform shrink-0 ${expandedId === trip.id ? 'rotate-180' : ''}`} />
+                  </div>
+
+                  <AnimatePresence>
+                    {expandedId === trip.id && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+                        className="overflow-hidden border-t border-gray-100">
+                        <div className="px-5 py-4 space-y-4">
+                          {trip.plan.days?.map(day => (
+                            <div key={day.day}>
+                              <p className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2" style={{ fontFamily: HL }}>
+                                Day {day.day} — {day.theme}
+                              </p>
+                              <div className="space-y-2">
+                                {day.stops?.map((stop, i) => (
+                                  <div key={i} className="flex gap-3 text-sm">
+                                    <span className="text-xs font-bold px-2 py-0.5 rounded-full shrink-0 h-fit"
+                                      style={{ backgroundColor: 'rgba(245,197,24,0.15)', color: '#1565C0', fontFamily: HL }}>
+                                      {stop.time}
+                                    </span>
+                                    <div>
+                                      <p className="font-semibold text-gray-800" style={{ fontFamily: HL }}>{stop.place}</p>
+                                      <p className="text-gray-500 text-xs" style={{ fontFamily: BL }}>{stop.activity}</p>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+
+                          <div className="pt-2 border-t border-gray-100 flex items-center justify-between gap-3">
+                            <p className="text-xs text-gray-400" style={{ fontFamily: BL }}>
+                              {trip.isPublic
+                                ? 'Anyone with the link can view this trip.'
+                                : 'Only you can see this trip until you share it.'}
+                            </p>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setMapTrip(trip); }}
+                              className="flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border transition hover:bg-blue-50"
+                              style={{ borderColor: 'rgba(11,61,145,0.2)', color: '#1565C0', fontFamily: BL }}>
+                              <MapPin className="w-3.5 h-3.5" /> View full itinerary
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); shareTrip(trip); }}
+                              disabled={sharingId === trip.id}
+                              className="shrink-0 inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full transition disabled:opacity-60"
+                              style={copiedId === trip.id
+                                ? { backgroundColor: 'rgba(34,197,94,0.12)', color: '#15803d', fontFamily: HL }
+                                : { backgroundColor: '#1565C0', color: '#F5C518', fontFamily: HL }}>
+                              {copiedId === trip.id
+                                ? <><Check className="w-3.5 h-3.5" />Link copied!</>
+                                : trip.isPublic
+                                  ? <><Link2 className="w-3.5 h-3.5" />Copy share link</>
+                                  : <><Share2 className="w-3.5 h-3.5" />Share trip</>}
+                            </button>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {mapTrip && <SavedTripModal trip={mapTrip} onClose={() => setMapTrip(null)} />}
+      </AnimatePresence>
+    </section>
+  );
+}
+
+export default function ItinerariesPage() {
+  return (
+    <div className="min-h-screen page-ground" suppressHydrationWarning>
+
+      <PageBanner
+        title="Itineraries"
+        subtitle="Plan your own trip with AI or browse our curated tours"
+      />
+
+      <div className="page-wrap px-4 py-10 space-y-14">
+
+        {/* AI Wizard */}
+        <section>
+          <ItineraryWizard />
+        </section>
+
+        {/* My Saved Trips */}
+        <SavedTripsSection />
+
+        {/* Divider */}
+        <div className="flex items-center gap-4">
+          <div className="flex-1 h-px bg-gray-200" />
+          <span className="text-xs font-bold text-gray-400 uppercase tracking-widest" style={{ fontFamily: HL }}>Or browse curated tours</span>
+          <div className="flex-1 h-px bg-gray-200" />
+        </div>
+
+        {/* Database itineraries */}
+        <section>
+          <DatabaseItineraries />
+        </section>
+
+      </div>
+    </div>
+  );
+}
+
+
+

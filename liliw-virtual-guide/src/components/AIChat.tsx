@@ -1,0 +1,759 @@
+'use client';
+
+import { useState, useRef, useEffect } from 'react';
+import { safeLocal } from '@/lib/safeStorage';
+import { usePathname } from 'next/navigation';
+import { Send, X, Loader, MapPin, Star, Utensils, Landmark, MessageSquarePlus, Eye } from 'lucide-react';
+import LilioAvatar from '@/components/LilioAvatar';
+import Link from 'next/link';
+import { motion, AnimatePresence } from 'framer-motion';
+import { logger } from '@/lib/logger';
+import type { ChatMessage } from '@/lib/types';
+
+const HL = 'var(--font-heading), Outfit, sans-serif';
+
+/**
+ * What Lilio reminds you he can do, one thing at a time.
+ *
+ * Each line names something concrete and answerable rather than inviting a
+ * question in the abstract: "ask me anything" is exactly the prompt that
+ * leaves people with nothing to say. They cycle in order so a visitor who
+ * stays on a page for a few minutes learns several different things he
+ * handles rather than the same one repeatedly.
+ */
+const CHAT_PROMPTS: { title: string; body: string; ask: string }[] = [
+  { title: 'Planning your day? \u2600\ufe0f',
+    body: 'I can build you an itinerary — tell me how long you have.',
+    ask: 'Can you plan a one-day trip around Liliw for me?' },
+  { title: 'Hungry? \ud83c\udf72',
+    body: 'Ask me where to eat and what the place is known for.',
+    ask: 'Where should I eat in Liliw?' },
+  { title: 'Looking for tsinelas? \ud83e\ude74',
+    body: 'I know which street the slipper shops are on.',
+    ask: 'Where do I buy tsinelas in Liliw?' },
+  { title: 'Going to the falls? \ud83d\udca7',
+    body: 'Ask me how to get to Kilangin and what to bring.',
+    ask: 'How do I get to Kilangin Falls?' },
+  { title: 'Curious about the church? \u26ea',
+    body: 'Ask me about St. John the Baptist and the town\u2019s history.',
+    ask: 'Tell me about the church in Liliw.' },
+  { title: 'What\u2019s on this month? \ud83c\udf89',
+    body: 'Ask me about festivals and upcoming events.',
+    ask: 'What events are happening in Liliw?' },
+  { title: 'First time here? \ud83d\uddfa\ufe0f',
+    body: 'Ask me what Liliw is known for and where to start.',
+    ask: 'What is Liliw known for?' },
+  { title: 'Stuck on the site? \ud83e\udded',
+    body: 'I can explain check-ins, points and how to save a trip.',
+    ask: 'How do check-ins and points work?' },
+];
+
+const BL = 'var(--font-body), "Plus Jakarta Sans", sans-serif';
+
+interface AttractionCard {
+  id: string;
+  name: string;
+  type: 'heritage' | 'spot' | 'dining' | 'footwear' | 'stay';
+  location?: string | null;
+  rating?: number | null;
+  imageUrl?: string | null;
+  url: string;
+}
+
+interface Message extends ChatMessage {
+  sender: 'user' | 'bot';
+  attractions?: AttractionCard[];
+}
+
+const TYPE_META: Record<string, { label: string; color: string; Icon: any }> = {
+  heritage: { label: 'Heritage', color: '#8B5CF6', Icon: Landmark },
+  spot:     { label: 'Attraction', color: '#1565C0', Icon: MapPin },
+  dining:   { label: 'Dining',  color: '#F97316', Icon: Utensils },
+  footwear: { label: 'Footwear Store', color: '#B45309', Icon: MapPin },
+  stay:     { label: 'Accommodations', color: '#0D9488', Icon: MapPin },
+};
+
+/**
+ * Openers for someone facing an empty box.
+ *
+ * Chosen to match what the town is actually known for and what the chat can
+ * answer from the CMS — slippers, the church, food, the festival — rather than
+ * generic prompts that would send Lilio hunting for content nobody has written.
+ */
+const QUICK_ASKS: { label: string; ask: string }[] = [
+  { label: '🥿 Tsinelas shopping', ask: 'Where can I buy tsinelas in Liliw?' },
+  { label: '🍽️ Where to eat',      ask: 'Where should I eat in Liliw?' },
+  { label: '⛪ Heritage sites',     ask: 'What heritage sites should I visit in Liliw?' },
+  { label: '🎉 Festivals',          ask: 'What festivals and events happen in Liliw?' },
+  { label: '🚗 Getting here',       ask: 'How do I get to Liliw from Manila?' },
+];
+
+/**
+ * Reads the page the visitor is on, so Lilio can answer about what is in front
+ * of them rather than about Liliw in general.
+ *
+ * Takes the main content where a page marks one, because otherwise the nav,
+ * the footer and the chat's own transcript come along and the useful part is
+ * buried. Everything is collapsed to plain text — the model gains nothing from
+ * markup, and it would eat the budget.
+ */
+function readPage(): { title: string; path: string; text: string } {
+  const main = document.querySelector('main') ?? document.body;
+
+  const clone = main.cloneNode(true) as HTMLElement;
+  // Strip what is furniture rather than content, plus the chat itself: without
+  // this the assistant reads its own replies back and answers those.
+  clone.querySelectorAll('script, style, nav, footer, [data-lilio-chat]').forEach(n => n.remove());
+
+  const text = (clone.textContent ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 2000);
+
+  const heading = document.querySelector('h1')?.textContent?.trim();
+
+  return {
+    title: heading || document.title || 'Liliw Tourism',
+    path: window.location.pathname,
+    text,
+  };
+}
+
+const getRandomGreeting = () => {
+  const greetings = [
+    'Kumusta! Welcome to Liliw! I\'m Lilio, your tour guide. What brings you to our wonderful town?',
+    'Hey there! I\'m Lilio, and I\'m here to help you explore Liliw! What would you like to know?',
+    'Magandang araw! Welcome to Liliw, Laguna! I\'m Lilio. Excited to show you around?',
+    'Hi! I\'m Lilio, your Liliw guide. What interests you most — our heritage, shopping, food, or something else?',
+    'Welcome to Liliw! I\'m Lilio. Been here many times? I\'d love to help you discover our gems!',
+    'Hello, travel friend! I\'m Lilio, your Liliw companion. What shall we explore together?',
+  ];
+  return greetings[Math.floor(Math.random() * greetings.length)];
+};
+
+/** Inline pieces of one line: [label](/path) links and **bold** runs. */
+function renderInline(text: string, onLinkClick: () => void, keyBase: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  // Links and bold in one pass, so a bold label inside a link cannot be split
+  // across two patterns and rendered as literal asterisks.
+  const re = /\[([^\]]+)\]\((\/[^)]+)\)|\*\*([^*]+)\*\*/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) nodes.push(text.slice(last, m.index));
+
+    if (m[2] !== undefined) {
+      const href = m[2];
+      nodes.push(
+        <a key={`${keyBase}-l${m.index}`} href={href}
+          onClick={(e) => { e.preventDefault(); onLinkClick(); window.location.href = href; }}
+          className="underline font-semibold" style={{ color: '#B8860B' }}>
+          {m[1]} →
+        </a>
+      );
+    } else {
+      nodes.push(<strong key={`${keyBase}-b${m.index}`} className="font-semibold text-gray-900">{m[3]}</strong>);
+    }
+    last = m.index + m[0].length;
+  }
+
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
+}
+
+/**
+ * The reply as blocks rather than one run of text.
+ *
+ * Everything the guide sends used to land in a single paragraph: newlines
+ * collapsed, bullets showed their leading hyphen, and "**Arabela**" was
+ * rendered with the asterisks visible. A three-place recommendation arrived as
+ * one dense sentence-blob that nobody reads on a phone.
+ */
+function renderBotText(text: string, onLinkClick: () => void): React.ReactNode {
+  const lines = text.split(/\n/).map((l) => l.trim());
+  const blocks: React.ReactNode[] = [];
+  let bullets: string[] = [];
+
+  const flushBullets = () => {
+    if (!bullets.length) return;
+    const items = bullets;
+    bullets = [];
+    blocks.push(
+      <ul key={`u${blocks.length}`} className="space-y-1.5 my-1.5">
+        {items.map((item, i) => (
+          <li key={i} className="flex gap-2">
+            {/* The marker sits in its own column so a wrapped second line lines
+                up with the first rather than under the bullet. */}
+            <span aria-hidden className="select-none text-blue-400 leading-relaxed">•</span>
+            <span className="flex-1">{renderInline(item, onLinkClick, `u${blocks.length}-${i}`)}</span>
+          </li>
+        ))}
+      </ul>
+    );
+  };
+
+  lines.forEach((line, i) => {
+    if (!line) { flushBullets(); return; }
+
+    const bullet = line.match(/^(?:[-*•]|\d+[.)])\s+(.*)$/);
+    if (bullet) { bullets.push(bullet[1]); return; }
+
+    // Markdown headings, rendered as a small label rather than printed with
+    // their hashes. The prompt asks the guide not to use them, but it reaches
+    // for one anyway when a question invites a longer answer, and "### What the
+    // page shows at a glance" appearing verbatim in a chat bubble looks broken.
+    const heading = line.match(/^#{1,6}\s+(.*)$/);
+    if (heading) {
+      flushBullets();
+      blocks.push(
+        <p key={`h${i}`} className="font-semibold text-gray-900 pt-1">
+          {renderInline(heading[1], onLinkClick, `h${i}`)}
+        </p>
+      );
+      return;
+    }
+
+    flushBullets();
+    blocks.push(
+      <p key={`p${i}`} className="leading-relaxed">
+        {renderInline(line, onLinkClick, `p${i}`)}
+      </p>
+    );
+  });
+
+  flushBullets();
+  return <div className="space-y-2">{blocks}</div>;
+}
+
+function AttractionCards({ cards, onClose }: { cards: AttractionCard[]; onClose: () => void }) {
+  return (
+    <div className="mt-2 flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: 'none' }}>
+      {cards.map((card, idx) => {
+        const meta = TYPE_META[card.type] ?? TYPE_META.spot;
+        const Icon = meta.Icon;
+        return (
+          <motion.div key={card.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.07 }}
+            className="shrink-0 w-36 rounded-xl overflow-hidden border border-gray-100 bg-white shadow-sm hover:shadow-md transition-all duration-200">
+            <Link href={card.url} onClick={onClose}>
+              {/* Image */}
+              <div className="h-20 relative overflow-hidden"
+                style={{ background: `linear-gradient(135deg, ${meta.color}22, ${meta.color}44)` }}>
+                {card.imageUrl
+                  ? <img src={card.imageUrl} alt={card.name} className="w-full h-full object-cover" />
+                  : <div className="absolute inset-0 flex items-center justify-center">
+                      <Icon className="w-7 h-7 opacity-40" style={{ color: meta.color }} />
+                    </div>
+                }
+                <span className="absolute top-1.5 left-1.5 text-white text-xs font-bold px-1.5 py-0.5 rounded-full"
+                  style={{ backgroundColor: meta.color, fontFamily: HL, fontSize: '10px' }}>
+                  {meta.label}
+                </span>
+              </div>
+              {/* Info */}
+              <div className="px-2.5 py-2">
+                <p className="text-xs font-bold leading-tight line-clamp-2 text-gray-800" style={{ fontFamily: HL }}>{card.name}</p>
+                {card.location && (
+                  <p className="text-gray-400 mt-0.5 flex items-center gap-0.5" style={{ fontSize: '10px', fontFamily: BL }}>
+                    <MapPin className="w-2.5 h-2.5 shrink-0" />{card.location}
+                  </p>
+                )}
+                {card.rating ? (
+                  <div className="flex items-center gap-0.5 mt-1">
+                    <Star className="w-2.5 h-2.5" fill="#F5C518" stroke="#F5C518" />
+                    <span style={{ fontSize: '10px', color: '#6B7280', fontFamily: BL }}>{card.rating}/5</span>
+                  </div>
+                ) : null}
+                <div className="mt-1.5 text-center text-xs font-bold py-1 rounded-lg text-white"
+                  style={{ backgroundColor: meta.color, fontFamily: HL, fontSize: '10px' }}>
+                  View →
+                </div>
+              </div>
+            </Link>
+          </motion.div>
+        );
+      })}
+    </div>
+  );
+}
+
+export default function AIChat() {
+  const pathname = usePathname();
+  const isMapPage = pathname === '/map';
+  const [isOpen, setIsOpen] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([
+    { id: '1', text: getRandomGreeting(), sender: 'bot', timestamp: new Date() },
+  ]);
+  const [input, setInput] = useState('');
+  const [showInvite, setShowInvite] = useState(false);
+  /** -1 while the greeting is showing, then an index into CHAT_PROMPTS. */
+  const [promptIdx, setPromptIdx] = useState(-1);
+  const stopReminders = useRef<(() => void) | null>(null);
+  // Page focus: while on, every question is answered against the page.
+  const [pageMode, setPageMode] = useState(false);
+  // Set while a drag is in progress so the click it ends with does not open
+  // the chat. A ref rather than state: it must be read inside the click
+  // handler in the same tick, and it should not cause a re-render.
+  const draggedRef = useRef(false);
+  // Keeps the button inside the window. Measured rather than guessed, and
+  // recalculated on resize — the numbers are offsets from where it already
+  // sits, which is 24px in from the bottom-right.
+  const [dragBounds, setDragBounds] = useState({ top: 0, left: 0, right: 0, bottom: 0 });
+
+  useEffect(() => {
+    const measure = () => setDragBounds({
+      top: -(window.innerHeight - 140),
+      left: -(window.innerWidth - 110),
+      right: 8,
+      bottom: 8,
+    });
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, []);
+  const [loading, setLoading] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  /**
+   * The nudge, and then the reminders.
+   *
+   * Lilio said hello once, four seconds in, and if you did not take it up you
+   * never heard from him again — so most people never learned the site had a
+   * chatbot at all, let alone what it was good for. Now a different prompt
+   * comes round every thirty seconds, each naming one concrete thing he can
+   * answer, because "ask me anything" tells nobody what to ask.
+   *
+   * It shows for nine seconds and then gets out of the way, it never appears
+   * while the chat is open, and the X stops it for good — on this page and on
+   * every later visit.
+   */
+  /*
+   * A new key, and a mute that expires.
+   *
+   * The old greeting wrote 'liliw-lilio-invite-seen' and read it as "never
+   * again". Reusing it here meant anyone who had ever dismissed that bubble —
+   * or simply clicked it to open the chat, which dismissed it too — had the
+   * flag set already, and the reminders were silenced before they ever ran.
+   * Nothing on screen could have explained that.
+   *
+   * So: a key of its own, holding the time the mute runs out rather than a
+   * bare yes. Dismissing quiets Lilio for a day, not for good, which is the
+   * right weight for a reminder that is meant to recur — and it means a stray
+   * tap on the X does not permanently remove the feature from someone's
+   * browser.
+   */
+  const MUTED_UNTIL_KEY = 'liliw-lilio-reminders-muted-until';
+  const MUTE_MS    = 24 * 60 * 60 * 1000;
+  const FIRST_MS   = 4000;   // the greeting, once the page has settled
+  const EVERY_MS   = 30000;  // and a reminder on the half minute after that
+  const VISIBLE_MS = 9000;
+
+  const dismissInvite = () => {
+    setShowInvite(false);
+    stopReminders.current?.();
+    safeLocal.set(MUTED_UNTIL_KEY, String(Date.now() + MUTE_MS));
+  };
+
+  useEffect(() => {
+    const until = Number(safeLocal.get(MUTED_UNTIL_KEY) ?? 0);
+    if (until > Date.now()) return;
+
+    // -1 is the greeting; from 0 on it is the rotating prompts, in order, so
+    // nobody sees the same line twice in a row.
+    let next = -1;
+    let hide: ReturnType<typeof setTimeout> | undefined;
+
+    const show = () => {
+      setPromptIdx(next);
+      setShowInvite(true);
+      clearTimeout(hide);
+      hide = setTimeout(() => setShowInvite(false), VISIBLE_MS);
+      next = next + 1 >= CHAT_PROMPTS.length ? 0 : next + 1;
+    };
+
+    const greeting = setTimeout(show, FIRST_MS);
+    const cycle = setInterval(show, EVERY_MS);
+
+    const stop = () => { clearTimeout(greeting); clearInterval(cycle); clearTimeout(hide); };
+    stopReminders.current = stop;
+    return stop;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
+   * Clears the thread back to a fresh greeting.
+   *
+   * The history sent to the model is built from `messages`, so emptying it
+   * genuinely starts over rather than only hiding what came before — ask about
+   * food, start again, and Lilio is no longer answering in the context of
+   * restaurants.
+   */
+  const startNewChat = () => {
+    setMessages([{ id: String(Date.now()), text: getRandomGreeting(), sender: 'bot', timestamp: new Date() }]);
+    setInput('');
+  };
+
+  /**
+   * Takes the text rather than reading the input box, so a quick-reply chip
+   * and the form can both use it. Previously the send path could only be
+   * driven by whatever was typed, which is why a chip could not simply ask.
+   */
+  const sendMessage = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || loading) return;
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      text: trimmed,
+      sender: 'user',
+      timestamp: new Date(),
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setInput('');
+    setLoading(true);
+
+    try {
+      const history = messages
+        .slice(1).slice(-10)
+        .map(m => ({ role: m.sender === 'user' ? 'user' : 'assistant' as const, content: m.text }));
+
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: trimmed, history, pageContext: pageMode ? readPage() : undefined }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        const msg = data?.unavailable
+          ? 'Chat is temporarily unavailable. Please try again later.'
+          : 'Sorry, I had trouble responding. Please try again.';
+        throw new Error(msg);
+      }
+
+      if (!data?.reply || typeof data.reply !== 'string') throw new Error('Invalid response');
+
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(),
+        text: data.reply,
+        sender: 'bot',
+        timestamp: new Date(),
+        attractions: data.attractions ?? [],
+      }]);
+    } catch (error: any) {
+      logger.error('Chat error:', error);
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(),
+        text: error?.message || 'Sorry, I had trouble responding. Please try again.',
+        sender: 'bot',
+        timestamp: new Date(),
+      }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <>
+      {/* A word from Lilio before you have opened anything.
+          Shown once per browser: an invitation that reappears on every page
+          load stops being an invitation and becomes something to dismiss. It
+          also waits a few seconds, so it does not land on top of someone still
+          reading the page they just opened. */}
+      <AnimatePresence>
+        {showInvite && !isOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: 8, scale: 0.94 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.94 }}
+            transition={{ duration: 0.22 }}
+            className={`fixed bottom-24 z-40 max-w-[15rem] ${isMapPage ? 'right-24' : 'right-6'}`}
+          >
+            {/* Tapping a reminder asks its question outright. A prompt that
+                names something answerable and then makes you retype it is
+                doing half the job. */}
+            <button
+              onClick={() => {
+                const prompt = promptIdx >= 0 ? CHAT_PROMPTS[promptIdx] : null;
+                setIsOpen(true);
+                if (prompt) setInput(prompt.ask);
+                dismissInvite();
+              }}
+              className="relative block text-left rounded-2xl rounded-br-sm bg-white shadow-xl px-4 py-3 pr-8 border hover:shadow-2xl transition-shadow"
+              style={{ borderColor: 'rgba(21,101,192,0.25)' }}
+              aria-live="polite"
+            >
+              <p className="text-sm font-bold leading-snug" style={{ color: '#0B3D91', fontFamily: HL }}>
+                {promptIdx >= 0 ? CHAT_PROMPTS[promptIdx].title : <>Kumusta! I&rsquo;m Lilio 👋</>}
+              </p>
+              <p className="text-xs text-gray-500 mt-0.5 leading-snug" style={{ fontFamily: BL }}>
+                {promptIdx >= 0
+                  ? CHAT_PROMPTS[promptIdx].body
+                  : 'Ask me anything about Liliw — where to eat, what to see, how to get around.'}
+              </p>
+            </button>
+            <span
+              role="button"
+              tabIndex={0}
+              aria-label="Dismiss"
+              onClick={dismissInvite}
+              onKeyDown={e => { if (e.key === 'Enter') dismissInvite(); }}
+              className="absolute top-2 right-2 w-5 h-5 grid place-items-center rounded-full text-gray-300 hover:text-gray-600 hover:bg-gray-100 cursor-pointer"
+            >
+              <X size={12} />
+            </span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Floating button.
+          Draggable, because it is fixed to the bottom-right and that is
+          exactly where a form's submit button, a cookie notice or the last
+          row of a table tends to be. Dragging is constrained to the viewport
+          so it cannot be thrown off-screen and lost. */}
+      <motion.button
+        drag
+        dragMomentum={false}
+        dragElastic={0.06}
+        dragConstraints={dragBounds}
+        onDragStart={() => { draggedRef.current = false; }}
+        onDrag={() => { draggedRef.current = true; }}
+        initial={{ scale: 0 }}
+        animate={{ scale: 1 }}
+        whileHover={{ scale: 1.1 }}
+        whileTap={{ scale: 0.92 }}
+        // A drag ends in a click, so without this the chat opens every time
+        // the button is moved.
+        onClick={() => {
+          if (draggedRef.current) { draggedRef.current = false; return; }
+          setIsOpen(!isOpen);
+          dismissInvite();
+        }}
+        // No `relative` here: `fixed` already establishes a containing block
+        // for the absolutely positioned head and dot below. Adding both put
+        // two position utilities on one element, and Tailwind emits `relative`
+        // after `fixed`, so it won — the button stopped being pinned to the
+        // viewport and rendered inline at the end of the page, out of sight.
+        className={`group fixed bottom-6 z-40 rounded-full text-white shadow-xl transition-shadow hover:shadow-2xl grid place-items-center ${isMapPage ? 'right-24' : 'right-6'}`}
+        style={{
+          width: 64, height: 64,
+          background: isOpen ? 'linear-gradient(135deg, #0B3D91, #1565C0)' : '#0B1220',
+          // The ring is the avatar's own edge rather than a border on the
+          // button, so the head can sit right against it without a gap. Gold
+          // over the old green: green read as a status light, and the site has
+          // exactly two accent colours.
+          boxShadow: isOpen
+            ? '0 10px 30px -10px rgba(11,61,145,0.7)'
+            : '0 0 0 3px #F5C518, 0 0 0 5px rgba(11,61,145,0.55), 0 10px 30px -10px rgba(0,0,0,0.6)',
+        }}
+        title="Chat with Lilio"
+        aria-label={isOpen ? 'Close chat' : 'Chat with Lilio'}
+      >
+        {isOpen ? <X size={24} /> : (
+          <>
+            {/* Says what tapping the face does. Hover only, and on desktop
+                only — on a phone it would sit there permanently, and the
+                invite bubble already covers that case. */}
+            <span
+              aria-hidden
+              className="pointer-events-none absolute right-full mr-3 hidden md:block whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-bold opacity-0 translate-x-1 transition-all duration-200 group-hover:opacity-100 group-hover:translate-x-0"
+              style={{
+                backgroundColor: '#0B3D91',
+                color: '#F5C518',
+                fontFamily: HL,
+                border: '1px solid rgba(245,197,24,0.5)',
+                boxShadow: '0 8px 20px rgba(3,12,36,0.45)',
+              }}
+            >
+              Ask Lilio
+            </span>
+
+            {/* Slightly larger than the button so the head fills the disc the
+                way a profile picture does, with the overflow clipped. */}
+            <span className="absolute inset-0 rounded-full overflow-hidden grid place-items-center">
+              <LilioAvatar size={62} crop="head" />
+            </span>
+            {/* His name rather than a status dot. A green dot claims he is
+                online, which says nothing useful — he answers whenever the
+                page loads. The name is what a first-time visitor actually
+                needs before deciding to tap a face. Sits on the bottom edge,
+                overlapping it, so it reads as a label on the avatar rather
+                than a separate element. */}
+            <span
+              className="absolute left-1/2 -translate-x-1/2 rounded-full px-2 py-0.5 leading-none"
+              style={{
+                bottom: -7,
+                backgroundColor: '#F5C518',
+                color: '#0A1A40',
+                fontFamily: HL,
+                fontSize: 11,
+                fontWeight: 800,
+                letterSpacing: '0.02em',
+                boxShadow: '0 0 0 2.5px #0B1220',
+              }}
+            >
+              Lilio
+            </span>
+          </>
+        )}
+      </motion.button>
+
+      {/* Chat window */}
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: 16, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 16, scale: 0.96 }}
+            transition={{ duration: 0.2 }}
+            data-lilio-chat
+            className={`fixed bottom-24 z-40 w-96 max-w-[calc(100vw-2rem)] rounded-2xl shadow-2xl flex flex-col overflow-hidden ${isMapPage ? 'right-24' : 'right-6'}`}
+            style={{ maxHeight: 600, border: '1.5px solid #1565C0', background: '#fff' }}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 text-white"
+              style={{ background: 'linear-gradient(135deg, #0B3D91 0%, #1565C0 100%)' }}>
+              <div className="flex items-center gap-3">
+                <LilioAvatar size={42} crop="head" />
+                <div>
+                  <p className="font-extrabold text-base leading-tight" style={{ fontFamily: HL }}>Lilio</p>
+                  <p className="text-xs opacity-75" style={{ fontFamily: BL }}>Your Liliw Travel Guide</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-1">
+                {/* Page focus — a mode, not an action. Pressing it sends
+                    nothing; it means every question that follows is answered
+                    against what is on screen, until it is switched off. */}
+                <button
+                  onClick={() => setPageMode(v => !v)}
+                  title={pageMode ? 'Focused on this page — tap to stop' : 'Focus on this page'}
+                  aria-pressed={pageMode}
+                  aria-label="Focus on this page"
+                  className={`w-8 h-8 flex items-center justify-center rounded-full transition ${pageMode ? '' : 'hover:bg-white/20'}`}
+                  style={pageMode ? { backgroundColor: '#22C55E', color: '#06281A' } : undefined}
+                >
+                  <Eye size={17} strokeWidth={2.2} />
+                </button>
+                {/* Only offered once there is something to clear — on a fresh
+                    thread it would do nothing visible and read as a broken
+                    button. Starting over also brings the quick questions back,
+                    since the thread is a greeting again. */}
+                {messages.length > 1 && (
+                  <button onClick={startNewChat} title="Start a new chat" aria-label="Start a new chat"
+                    className="w-8 h-8 flex items-center justify-center rounded-full transition hover:bg-white/20">
+                    <MessageSquarePlus size={17} />
+                  </button>
+                )}
+                <button onClick={() => setIsOpen(false)} title="Close" aria-label="Close chat"
+                  className="w-8 h-8 flex items-center justify-center rounded-full transition hover:bg-white/20">
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3" style={{ background: '#F8FAFF' }}>
+              {messages.map(msg => (
+                <motion.div key={msg.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                  className={`flex items-end gap-2 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  {/* Lilio beside what he says, so a long thread still reads as
+                      a conversation with someone rather than blocks of text. */}
+                  {msg.sender === 'bot' && <LilioAvatar size={26} crop="head" />}
+                  <div className={`${msg.sender === 'user' ? 'max-w-[78%]' : 'max-w-[86%]'}`}>
+                    <div
+                      className={`px-4 py-3 rounded-2xl shadow-sm ${
+                        msg.sender === 'user'
+                          ? 'text-white rounded-br-sm'
+                          : 'text-gray-800 rounded-bl-sm border border-blue-100 bg-white'
+                      }`}
+                      style={msg.sender === 'user' ? { background: 'linear-gradient(135deg, #0B3D91, #1565C0)' } : {}}>
+                      {/* A div for the guide, because its reply is now
+                          paragraphs and lists — block elements, which are not
+                          valid inside a <p>. The visitor's own message is
+                          plain text and stays one. */}
+                      {msg.sender === 'bot' ? (
+                        <div className="text-sm" style={{ fontFamily: BL }}>
+                          {renderBotText(msg.text, () => setIsOpen(false))}
+                        </div>
+                      ) : (
+                        <p className="text-sm leading-relaxed" style={{ fontFamily: BL }}>
+                          {msg.text}
+                        </p>
+                      )}
+                      <span className={`text-xs opacity-60 block mt-1 ${msg.sender === 'user' ? 'text-right text-white' : 'text-gray-400'}`}
+                        style={{ fontFamily: BL }}>
+                        {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+
+                    {/* Attraction cards below bot bubble */}
+                    {msg.sender === 'bot' && msg.attractions && msg.attractions.length > 0 && (
+                      <AttractionCards cards={msg.attractions} onClose={() => setIsOpen(false)} />
+                    )}
+                  </div>
+                </motion.div>
+              ))}
+
+              {loading && (
+                <div className="flex items-end gap-2 justify-start">
+                  <LilioAvatar size={26} crop="head" />
+                  <div className="bg-white border border-blue-100 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm flex items-center gap-2">
+                    <Loader size={16} className="animate-spin" style={{ color: '#1565C0' }} />
+                    <span className="text-xs text-gray-400" style={{ fontFamily: BL }}>Lilio is thinking…</span>
+                  </div>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* Quick questions.
+                Shown only while the thread is still just the greeting: they
+                exist to get someone past the blank box, and once a
+                conversation is going they would be answering a question
+                nobody asked. Each sends the full sentence rather than the
+                short label, because the model reads the message and "Food"
+                on its own is not a question. */}
+            {messages.length === 1 && !loading && (
+              <div className="px-4 pt-1 pb-2 flex flex-wrap gap-1.5 bg-white border-t border-blue-50">
+                {QUICK_ASKS.map(q => (
+                  <button
+                    key={q.label}
+                    onClick={() => sendMessage(q.ask)}
+                    className="px-3 py-1.5 rounded-full text-xs font-semibold border transition hover:bg-blue-50"
+                    style={{ borderColor: 'rgba(21,101,192,0.3)', color: '#1565C0', fontFamily: BL }}
+                  >
+                    {q.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Input */}
+            <form onSubmit={e => { e.preventDefault(); sendMessage(input); }}
+              className="px-4 py-3 border-t border-blue-100 bg-white flex gap-2 items-center">
+              <input
+                type="text"
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                placeholder={pageMode ? "Ask about this page…" : "Ask about Liliw…"}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200 text-sm text-gray-800 placeholder-gray-400 transition"
+                style={{ fontFamily: BL }}
+              />
+              <motion.button type="submit" disabled={loading}
+                whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.93 }}
+                className="w-10 h-10 flex items-center justify-center rounded-xl text-white shadow transition disabled:opacity-40"
+                style={{ background: 'linear-gradient(135deg, #0B3D91, #1565C0)' }}>
+                <Send size={17} strokeWidth={2.5} />
+              </motion.button>
+            </form>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+}
