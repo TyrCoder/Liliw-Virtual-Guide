@@ -92,6 +92,38 @@
   .links .label { font-weight: 600; color: var(--navy); }
   .tag { font-size: .75rem; background: var(--bg); color: var(--muted); padding: 2px 8px; border-radius: 99px; }
   footer { text-align: center; color: var(--muted); font-size: .85rem; padding: 24px; }
+  img { max-width: 100%; height: auto; }
+  .grid { grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); }
+  .person strong { display: block; overflow-wrap: anywhere; }
+  .links a { overflow-wrap: anywhere; }
+  .adviser { margin-top: 16px; display: flex; justify-content: center; }
+  .adviser .person { width: 100%; max-width: 320px; border-color: var(--orange); }
+
+  /* Tablet */
+  @media (max-width: 768px) {
+    header { padding: 40px 18px 44px; }
+    main { padding: 20px 14px 48px; }
+    section { padding: 22px 18px; margin-bottom: 18px; }
+    section h2 { font-size: 1.25rem; }
+  }
+
+  /* Phone */
+  @media (max-width: 520px) {
+    header { padding: 32px 16px 36px; }
+    header .school { font-size: .72rem; letter-spacing: .08em; }
+    header .subtitle { font-size: .95rem; }
+    .btns { flex-direction: column; align-items: stretch; }
+    .btn { text-align: center; }
+    nav {
+      justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto;
+      -webkit-overflow-scrolling: touch; scrollbar-width: none;
+    }
+    nav::-webkit-scrollbar { display: none; }
+    nav a { white-space: nowrap; flex: 0 0 auto; }
+    main { padding: 16px 10px 40px; }
+    section { padding: 18px 14px; border-radius: 10px; }
+    .links li { flex-direction: column; align-items: flex-start; gap: 4px; }
+  }
 </style>
 </head>
 <body>
@@ -120,10 +152,12 @@
   <section id="team">
     <h2>Team Members &amp; Adviser</h2>
     <div class="grid">
-      <div class="person"><div class="avatar">?</div><strong>[Member Name]</strong><div class="role">[Role]</div></div>
-      <div class="person"><div class="avatar">?</div><strong>[Member Name]</strong><div class="role">[Role]</div></div>
-      <div class="person"><div class="avatar">?</div><strong>[Member Name]</strong><div class="role">[Role]</div></div>
-      <div class="person"><div class="avatar">?</div><strong>[Adviser Name]</strong><div class="role">Research Adviser</div></div>
+      <div class="person"><div class="avatar">TB</div><strong>Timothy Kyl Q. Balbieran</strong><div class="role">Researcher</div></div>
+      <div class="person"><div class="avatar">RC</div><strong>Razeel V. Cabela</strong><div class="role">Researcher</div></div>
+      <div class="person"><div class="avatar">AM</div><strong>Ashley May M. Martinez</strong><div class="role">Researcher</div></div>
+    </div>
+    <div class="adviser">
+      <div class="person"><div class="avatar">MV</div><strong>Mia V. Villarica</strong><div class="role">Research Adviser</div></div>
     </div>
   </section>
 
