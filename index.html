@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Liliw Virtual Guide | Research Project</title>
+<link rel="icon" href="liliw-virtual-guide/public/favicon.png">
+<style>
+  :root {
+    --navy: #13294b;
+    --maroon: #8b1a2b;
+    --orange: #f2a007;
+    --bg: #f6f7fb;
+    --card: #ffffff;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  a { color: var(--maroon); }
+  header {
+    background: linear-gradient(135deg, var(--navy) 0%, #1d3a6b 60%, var(--maroon) 100%);
+    color: #fff;
+    padding: 56px 20px 64px;
+    text-align: center;
+  }
+  header .school { font-size: .85rem; letter-spacing: .12em; text-transform: uppercase; opacity: .85; margin: 0; }
+  header h1 { font-size: clamp(2rem, 5vw, 3rem); margin: 12px 0 8px; }
+  header .subtitle { max-width: 760px; margin: 0 auto; opacity: .92; }
+  .btns { margin-top: 28px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-block; padding: 12px 22px; border-radius: 8px;
+    font-weight: 600; text-decoration: none;
+  }
+  .btn-primary { background: var(--orange); color: var(--navy); }
+  .btn-ghost { border: 1.5px solid rgba(255,255,255,.7); color: #fff; }
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    background: var(--card); border-bottom: 1px solid var(--line);
+    display: flex; gap: 4px; justify-content: center; flex-wrap: wrap; padding: 8px;
+  }
+  nav a {
+    color: var(--navy); text-decoration: none; font-size: .9rem; font-weight: 600;
+    padding: 6px 12px; border-radius: 6px;
+  }
+  nav a:hover { background: var(--bg); }
+  main { max-width: 1000px; margin: 0 auto; padding: 32px 20px 64px; }
+  section {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 28px; margin-bottom: 24px;
+  }
+  section h2 {
+    margin: 0 0 16px; color: var(--navy); font-size: 1.4rem;
+    border-left: 5px solid var(--orange); padding-left: 12px;
+  }
+  .placeholder {
+    background: #fff8e6; border: 1.5px dashed var(--orange); color: #8a5a00;
+    border-radius: 8px; padding: 12px 14px; font-style: italic;
+  }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .person {
+    border: 1px solid var(--line); border-radius: 10px; padding: 16px; text-align: center;
+  }
+  .person .avatar {
+    width: 64px; height: 64px; border-radius: 50%; margin: 0 auto 10px;
+    background: var(--bg); display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 1.4rem; font-weight: 700;
+  }
+  .person .role { color: var(--muted); font-size: .85rem; }
+  .shot {
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--card);
+  }
+  .shot .img {
+    aspect-ratio: 16 / 10; background: var(--bg); display: flex; align-items: center;
+    justify-content: center; color: var(--muted); font-size: .85rem;
+  }
+  .shot img { width: 100%; display: block; }
+  .shot .cap { padding: 12px 14px; }
+  .shot .cap strong { color: var(--navy); }
+  .links { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  .links li {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; flex-wrap: wrap;
+  }
+  .links .label { font-weight: 600; color: var(--navy); }
+  .tag { font-size: .75rem; background: var(--bg); color: var(--muted); padding: 2px 8px; border-radius: 99px; }
+  footer { text-align: center; color: var(--muted); font-size: .85rem; padding: 24px; }
+</style>
+</head>
+<body>
+
+<header>
+  <p class="school">Laguna State Polytechnic University &middot; College of Computer Studies</p>
+  <h1>Liliw Virtual Guide</h1>
+  <p class="subtitle">[Full research title goes here]</p>
+  <div class="btns">
+    <a class="btn btn-primary" href="https://visitliliw.vercel.app/" target="_blank" rel="noopener">Open Live System</a>
+    <a class="btn btn-ghost" href="https://github.com/TyrCoder/Liliw-Virtual-Guide" target="_blank" rel="noopener">View Repository</a>
+  </div>
+</header>
+
+<nav>
+  <a href="#team">Team</a>
+  <a href="#problem">Problem &amp; Objectives</a>
+  <a href="#methodology">Methodology</a>
+  <a href="#features">Features</a>
+  <a href="#documentation">Documentation</a>
+  <a href="#links">Links</a>
+</nav>
+
+<main>
+
+  <section id="team">
+    <h2>Team Members &amp; Adviser</h2>
+    <div class="grid">
+      <div class="person"><div class="avatar">?</div><strong>[Member Name]</strong><div class="role">[Role]</div></div>
+      <div class="person"><div class="avatar">?</div><strong>[Member Name]</strong><div class="role">[Role]</div></div>
+      <div class="person"><div class="avatar">?</div><strong>[Member Name]</strong><div class="role">[Role]</div></div>
+      <div class="person"><div class="avatar">?</div><strong>[Adviser Name]</strong><div class="role">Research Adviser</div></div>
+    </div>
+  </section>
+
+  <section id="problem">
+    <h2>Problem Statement</h2>
+    <p class="placeholder">[Paste the problem statement from the manuscript here.]</p>
+    <h2 style="margin-top:28px">Objectives</h2>
+    <p><strong>General Objective</strong></p>
+    <p class="placeholder">[General objective]</p>
+    <p><strong>Specific Objectives</strong></p>
+    <ol>
+      <li class="placeholder" style="margin-bottom:8px">[Specific objective 1]</li>
+      <li class="placeholder" style="margin-bottom:8px">[Specific objective 2]</li>
+      <li class="placeholder">[Specific objective 3]</li>
+    </ol>
+  </section>
+
+  <section id="methodology">
+    <h2>Methodology</h2>
+    <p class="placeholder">[Development methodology (e.g., Agile / Waterfall / RAD), research design, respondents, data gathering, and evaluation instrument.]</p>
+  </section>
+
+  <section id="features">
+    <h2>System Features &amp; Screenshots</h2>
+    <div class="grid">
+      <div class="shot"><div class="img">Screenshot</div><div class="cap"><strong>[Feature name]</strong><br><span class="role">[Short description]</span></div></div>
+      <div class="shot"><div class="img">Screenshot</div><div class="cap"><strong>[Feature name]</strong><br><span class="role">[Short description]</span></div></div>
+      <div class="shot"><div class="img">Screenshot</div><div class="cap"><strong>[Feature name]</strong><br><span class="role">[Short description]</span></div></div>
+      <div class="shot"><div class="img">Screenshot</div><div class="cap"><strong>[Feature name]</strong><br><span class="role">[Short description]</span></div></div>
+      <div class="shot"><div class="img">Screenshot</div><div class="cap"><strong>[Feature name]</strong><br><span class="role">[Short description]</span></div></div>
+      <div class="shot"><div class="img">Screenshot</div><div class="cap"><strong>[Feature name]</strong><br><span class="role">[Short description]</span></div></div>
+    </div>
+  </section>
+
+  <section id="documentation">
+    <h2>System Documentation &amp; Diagrams</h2>
+    <div class="grid">
+      <div class="shot"><img src="liliw-virtual-guide/docs/figures/usecase.png" alt="Use case diagram" loading="lazy"><div class="cap"><strong>Use Case Diagram</strong></div></div>
+      <div class="shot"><img src="liliw-virtual-guide/docs/erd/identity.png" alt="ERD: identity" loading="lazy"><div class="cap"><strong>ERD: Identity</strong></div></div>
+      <div class="shot"><img src="liliw-virtual-guide/docs/erd/content.png" alt="ERD: content" loading="lazy"><div class="cap"><strong>ERD: Content</strong></div></div>
+      <div class="shot"><img src="liliw-virtual-guide/docs/erd/business.png" alt="ERD: business" loading="lazy"><div class="cap"><strong>ERD: Business</strong></div></div>
+      <div class="shot"><img src="liliw-virtual-guide/docs/erd/engagement.png" alt="ERD: engagement" loading="lazy"><div class="cap"><strong>ERD: Engagement</strong></div></div>
+      <div class="shot"><img src="liliw-virtual-guide/docs/erd/participation.png" alt="ERD: participation" loading="lazy"><div class="cap"><strong>ERD: Participation</strong></div></div>
+      <div class="shot"><img src="liliw-virtual-guide/docs/erd/operations.png" alt="ERD: operations" loading="lazy"><div class="cap"><strong>ERD: Operations</strong></div></div>
+    </div>
+    <p style="margin-top:16px">
+      More: <a href="liliw-virtual-guide/docs/flowchart.html" target="_blank">System Flowchart</a> &middot;
+      <a href="https://github.com/TyrCoder/Liliw-Virtual-Guide/blob/main/liliw-virtual-guide/docs/system-architecture.md" target="_blank" rel="noopener">System Architecture</a>
+    </p>
+  </section>
+
+  <section id="links">
+    <h2>Links</h2>
+    <ul class="links">
+      <li><span class="label">Live System</span><a href="https://visitliliw.vercel.app/" target="_blank" rel="noopener">visitliliw.vercel.app</a></li>
+      <li><span class="label">GitHub Repository</span><a href="https://github.com/TyrCoder/Liliw-Virtual-Guide" target="_blank" rel="noopener">github.com/TyrCoder/Liliw-Virtual-Guide</a></li>
+      <li><span class="label">User Manual</span><a href="setup-and-user-guides/Liliw-Virtual-Guide-User-Manual.pdf" target="_blank">PDF</a></li>
+      <li><span class="label">System / Setup Manual</span><a href="setup-and-user-guides/Liliw-Virtual-Guide-System-Manual.pdf" target="_blank">PDF</a></li>
+      <li><span class="label">Research Manuscript</span><span class="tag">Coming soon</span></li>
+      <li><span class="label">Demo Video</span><span class="tag">Coming soon</span></li>
+    </ul>
+  </section>
+
+</main>
+
+<footer>
+  Liliw Virtual Guide &middot; College of Computer Studies, Laguna State Polytechnic University
+</footer>
+
+</body>
+</html>
