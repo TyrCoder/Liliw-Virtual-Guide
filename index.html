@@ -92,6 +92,15 @@
   .links .label { font-weight: 600; color: var(--navy); }
   .tag { font-size: .75rem; background: var(--bg); color: var(--muted); padding: 2px 8px; border-radius: 99px; }
   footer { text-align: center; color: var(--muted); font-size: .85rem; padding: 24px; }
+  .degree { margin: 10px 0 0; font-size: .85rem; opacity: .8; }
+  .objectives li, .phases li { margin-bottom: 10px; }
+  .phases { padding-left: 22px; }
+  .phases li span { display: block; color: var(--muted); font-size: .92rem; }
+  .facts { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); margin: 4px 0 18px; }
+  .fact { background: var(--bg); border-radius: 8px; padding: 12px 14px; border-left: 4px solid var(--maroon); }
+  .fact span { display: block; font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .fact strong { color: var(--navy); }
+  h3.sub { color: var(--navy); margin: 28px 0 12px; }
   img { max-width: 100%; height: auto; }
   .grid { grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); }
   .person strong { display: block; overflow-wrap: anywhere; }
@@ -131,7 +140,8 @@
 <header>
   <p class="school">Laguna State Polytechnic University &middot; College of Computer Studies</p>
   <h1>Liliw Virtual Guide</h1>
-  <p class="subtitle">[Full research title goes here]</p>
+  <p class="subtitle">An AI-Driven Progressive Web Application for Cultural Heritage and Tourism Information Management for the Liliw Culture, History, Arts, and Tourism Office (CHATO)</p>
+  <p class="degree">A Capstone Project &middot; Bachelor of Science in Information Technology</p>
   <div class="btns">
     <a class="btn btn-primary" href="https://visitliliw.vercel.app/" target="_blank" rel="noopener">Open Live System</a>
     <a class="btn btn-ghost" href="https://github.com/TyrCoder/Liliw-Virtual-Guide" target="_blank" rel="noopener">View Repository</a>
@@ -163,32 +173,66 @@
 
   <section id="problem">
     <h2>Problem Statement</h2>
-    <p class="placeholder">[Paste the problem statement from the manuscript here.]</p>
+    <p>Liliw, Laguna is rich in historical landmarks, religious sites, festivals, footwear craftsmanship and local food. The Liliw Culture, History, Arts, and Tourism Office (CHATO) promotes these resources, coordinates tourism activities and collects tourist arrival records.</p>
+    <p>Interviews with CHATO personnel showed that tourism and cultural heritage information about Liliw is <strong>fragmented across separate channels</strong> such as Facebook, printed materials, word of mouth, vloggers and an online page. Tourist arrival records are gathered through establishment visits or photos sent through Messenger, then consolidated by hand. This process <strong>depends on staff availability and records kept in separate places</strong>, and CHATO has <strong>limited digital tools</strong> for collecting, reviewing, updating and publishing this information.</p>
+    <p>The study addresses the need for <strong>one CHATO-managed platform</strong> that brings tourism content, business submissions, visitor assistance, feedback and arrival records together.</p>
+
     <h2 style="margin-top:28px">Objectives</h2>
     <p><strong>General Objective</strong></p>
-    <p class="placeholder">[General objective]</p>
+    <p>To design, develop, test, and evaluate the Liliw Virtual Guide, an AI-driven Progressive Web Application for centralized cultural heritage and tourism information management for Liliw CHATO.</p>
     <p><strong>Specific Objectives</strong></p>
-    <ol>
-      <li class="placeholder" style="margin-bottom:8px">[Specific objective 1]</li>
-      <li class="placeholder" style="margin-bottom:8px">[Specific objective 2]</li>
-      <li class="placeholder">[Specific objective 3]</li>
+    <ol class="objectives">
+      <li>To analyze the existing tourism and cultural heritage information management processes of Liliw CHATO and identify the challenges and system requirements.</li>
+      <li>To design and develop the Liliw Virtual Guide as an AI-driven Progressive Web Application incorporating the functionalities listed under <a href="#features">System Features</a>.</li>
+      <li>To implement role-based access and system functionalities for Admin, Editors, Local Business Owners, and Tourists/Visitors according to their designated responsibilities.</li>
+      <li>To test and evaluate the functional requirements of the system through Black Box Testing to determine whether its modules and role-based functionalities operate according to their specified requirements and expected outputs.</li>
+      <li>To determine the acceptability of the system among its intended users using selected Technology Acceptance Model (TAM) constructs: Perceived Ease of Use, Perceived Usefulness, Attitude Toward Use, Behavioral Intention to Use, and Actual System Use.</li>
     </ol>
   </section>
 
   <section id="methodology">
     <h2>Methodology</h2>
-    <p class="placeholder">[Development methodology (e.g., Agile / Waterfall / RAD), research design, respondents, data gathering, and evaluation instrument.]</p>
+    <div class="facts">
+      <div class="fact"><span>Research Design</span><strong>Descriptive-Developmental</strong></div>
+      <div class="fact"><span>Development Model</span><strong>Agile</strong></div>
+      <div class="fact"><span>Functional Testing</span><strong>Black-Box Testing</strong></div>
+      <div class="fact"><span>User Evaluation</span><strong>Technology Acceptance Model</strong></div>
+    </div>
+    <p>The <strong>descriptive</strong> component examined CHATO's existing processes, information needs and stakeholder requirements through interviews, observation and other fact-finding activities. The <strong>developmental</strong> component used those requirements to design, build, test and refine the system.</p>
+    <p>Development followed the <strong>Agile</strong> model in six iterative phases, revisited whenever testing or user feedback called for changes:</p>
+    <ol class="phases">
+      <li><strong>Requirements Planning</strong><span>Translate CHATO processes, user roles and needs into functional and non-functional requirements.</span></li>
+      <li><strong>System Design</strong><span>Interface, navigation, database, architecture and role permissions.</span></li>
+      <li><strong>Development &amp; Integration</strong><span>Build and connect the modules, database and external services.</span></li>
+      <li><strong>Testing</strong><span>Structured black-box test cases comparing actual against expected results.</span></li>
+      <li><strong>Deployment &amp; User Evaluation</strong><span>Intended users try role-specific functions and complete the evaluation questionnaire.</span></li>
+      <li><strong>Revision &amp; Refinement</strong><span>Fix issues and improve the system based on test findings and feedback.</span></li>
+    </ol>
+    <p><strong>Testing and evaluation.</strong> Ten qualified IT system testers ran the prepared black-box test cases. A separate System User Evaluation with intended users (Admin, Editors, Local Business Owners and Tourists/Visitors) measured acceptance using five TAM constructs. Results were analyzed using frequency and percentage, weighted mean, Likert-scale interpretation and standard deviation.</p>
+    <p><strong>Built with:</strong> Next.js &middot; Supabase &middot; Progressive Web App &middot; deployed on Vercel</p>
   </section>
 
   <section id="features">
     <h2>System Features &amp; Screenshots</h2>
     <div class="grid">
-      <div class="shot"><div class="img">Screenshot</div><div class="cap"><strong>[Feature name]</strong><br><span class="role">[Short description]</span></div></div>
-      <div class="shot"><div class="img">Screenshot</div><div class="cap"><strong>[Feature name]</strong><br><span class="role">[Short description]</span></div></div>
-      <div class="shot"><div class="img">Screenshot</div><div class="cap"><strong>[Feature name]</strong><br><span class="role">[Short description]</span></div></div>
-      <div class="shot"><div class="img">Screenshot</div><div class="cap"><strong>[Feature name]</strong><br><span class="role">[Short description]</span></div></div>
-      <div class="shot"><div class="img">Screenshot</div><div class="cap"><strong>[Feature name]</strong><br><span class="role">[Short description]</span></div></div>
-      <div class="shot"><div class="img">Screenshot</div><div class="cap"><strong>[Feature name]</strong><br><span class="role">[Short description]</span></div></div>
+      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>360&deg; Virtual Tours</strong><br><span class="role">Explore Liliw's landmarks and destinations in immersive 360-degree views.</span></div></div>
+      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>AI-Assisted Virtual Guide</strong><br><span class="role">A chat assistant that answers visitor questions about Liliw's attractions and culture.</span></div></div>
+      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>Analytics Dashboard</strong><br><span class="role">Visitor, content and arrival statistics to support CHATO's planning and reporting.</span></div></div>
+      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>Content Management System</strong><br><span class="role">Lets CHATO add, edit, review and publish tourism and cultural content.</span></div></div>
+      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>Cultural Heritage &amp; Tourism Info</strong><br><span class="role">Centralized information on Liliw's landmarks, history, festivals and products.</span></div></div>
+      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>Interactive Map &amp; Itinerary Builder</strong><br><span class="role">Find attractions on a map and plan a personalized visit.</span></div></div>
+      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>Business Submission &amp; Review</strong><br><span class="role">Local Business Owners submit listings; CHATO reviews them before publishing.</span></div></div>
+      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>Media Gallery &amp; Storytelling</strong><br><span class="role">Photos, videos and narrated stories about Liliw's culture and heritage.</span></div></div>
+      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>Progressive Web App</strong><br><span class="role">Works on any screen size, installs like an app, and opens previously loaded content offline.</span></div></div>
+      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>QR-Based Arrival Recording</strong><br><span class="role">Records tourist arrivals by scanning QR codes at selected locations.</span></div></div>
+      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>Visitor Feedback</strong><br><span class="role">Visitors rate and comment on their experience; CHATO manages the responses.</span></div></div>
+    </div>
+    <h3 class="sub">User Roles</h3>
+    <div class="facts">
+      <div class="fact"><span>Admin</span><strong>Full system and user management</strong></div>
+      <div class="fact"><span>Editors</span><strong>Manage and review content</strong></div>
+      <div class="fact"><span>Local Business Owners</span><strong>Submit business information</strong></div>
+      <div class="fact"><span>Tourists / Visitors</span><strong>Explore, plan and give feedback</strong></div>
     </div>
   </section>
 
