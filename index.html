@@ -78,10 +78,11 @@
     border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--card);
   }
   .shot .img {
-    aspect-ratio: 16 / 10; background: var(--bg); display: flex; align-items: center;
+    aspect-ratio: 900 / 436; background: var(--bg); display: flex; align-items: center;
     justify-content: center; color: var(--muted); font-size: .85rem;
   }
-  .shot img { width: 100%; display: block; }
+  .shot img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
+  a.img { cursor: zoom-in; }
   .shot .cap { padding: 12px 14px; }
   .shot .cap strong { color: var(--navy); }
   .links { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
@@ -215,17 +216,26 @@
   <section id="features">
     <h2>System Features &amp; Screenshots</h2>
     <div class="grid">
-      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>360&deg; Virtual Tours</strong><br><span class="role">Explore Liliw's landmarks and destinations in immersive 360-degree views.</span></div></div>
-      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>AI-Assisted Virtual Guide</strong><br><span class="role">A chat assistant that answers visitor questions about Liliw's attractions and culture.</span></div></div>
-      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>Analytics Dashboard</strong><br><span class="role">Visitor, content and arrival statistics to support CHATO's planning and reporting.</span></div></div>
-      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>Content Management System</strong><br><span class="role">Lets CHATO add, edit, review and publish tourism and cultural content.</span></div></div>
-      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>Cultural Heritage &amp; Tourism Info</strong><br><span class="role">Centralized information on Liliw's landmarks, history, festivals and products.</span></div></div>
-      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>Interactive Map &amp; Itinerary Builder</strong><br><span class="role">Find attractions on a map and plan a personalized visit.</span></div></div>
-      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>Business Submission &amp; Review</strong><br><span class="role">Local Business Owners submit listings; CHATO reviews them before publishing.</span></div></div>
-      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>Media Gallery &amp; Storytelling</strong><br><span class="role">Photos, videos and narrated stories about Liliw's culture and heritage.</span></div></div>
-      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>Progressive Web App</strong><br><span class="role">Works on any screen size, installs like an app, and opens previously loaded content offline.</span></div></div>
-      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>QR-Based Arrival Recording</strong><br><span class="role">Records tourist arrivals by scanning QR codes at selected locations.</span></div></div>
-      <div class="shot"><div class="img">Screenshot coming soon</div><div class="cap"><strong>Visitor Feedback</strong><br><span class="role">Visitors rate and comment on their experience; CHATO manages the responses.</span></div></div>
+      <div class="shot"><a class="img" href="screenshots/virtual-tour-360.jpg" target="_blank"><img src="screenshots/virtual-tour-360.jpg" alt="360-degree Virtual Tours screenshot" loading="lazy"></a><div class="cap"><strong>360&deg; Virtual Tours</strong><br><span class="role">Explore Liliw's landmarks and destinations in immersive 360-degree views.</span></div></div>
+      <div class="shot"><a class="img" href="screenshots/ai-virtual-guide.jpg" target="_blank"><img src="screenshots/ai-virtual-guide.jpg" alt="AI-Assisted Virtual Guide screenshot" loading="lazy"></a><div class="cap"><strong>AI-Assisted Virtual Guide</strong><br><span class="role">A chat assistant that answers visitor questions about Liliw's attractions and culture.</span></div></div>
+      <div class="shot"><a class="img" href="screenshots/admin-dashboard-analytics.jpg" target="_blank"><img src="screenshots/admin-dashboard-analytics.jpg" alt="Analytics Dashboard screenshot" loading="lazy"></a><div class="cap"><strong>Analytics Dashboard</strong><br><span class="role">Visitor, content and arrival statistics to support CHATO's planning and reporting.</span></div></div>
+      <div class="shot"><a class="img" href="screenshots/cms-edit-content.jpg" target="_blank"><img src="screenshots/cms-edit-content.jpg" alt="Content Management System screenshot" loading="lazy"></a><div class="cap"><strong>Content Management System</strong><br><span class="role">Lets CHATO add, edit, review and publish tourism and cultural content.</span></div></div>
+      <div class="shot"><a class="img" href="screenshots/attraction-details.jpg" target="_blank"><img src="screenshots/attraction-details.jpg" alt="Cultural Heritage and Tourism Info screenshot" loading="lazy"></a><div class="cap"><strong>Cultural Heritage &amp; Tourism Info</strong><br><span class="role">Centralized information on Liliw's landmarks, history, festivals and products.</span></div></div>
+      <div class="shot"><a class="img" href="screenshots/interactive-map.jpg" target="_blank"><img src="screenshots/interactive-map.jpg" alt="Interactive Map and Itinerary Builder screenshot" loading="lazy"></a><div class="cap"><strong>Interactive Map &amp; Itinerary Builder</strong><br><span class="role">Find attractions on a map and plan a personalized visit.</span></div></div>
+      <div class="shot"><a class="img" href="screenshots/lbo-business-submission.jpg" target="_blank"><img src="screenshots/lbo-business-submission.jpg" alt="Business Submission and Review screenshot" loading="lazy"></a><div class="cap"><strong>Business Submission &amp; Review</strong><br><span class="role">Local Business Owners submit listings; CHATO reviews them before publishing.</span></div></div>
+      <div class="shot"><a class="img" href="screenshots/cultural-storytelling.jpg" target="_blank"><img src="screenshots/cultural-storytelling.jpg" alt="Media Gallery and Storytelling screenshot" loading="lazy"></a><div class="cap"><strong>Media Gallery &amp; Storytelling</strong><br><span class="role">Photos, videos and narrated stories about Liliw's culture and heritage.</span></div></div>
+      <div class="shot"><a class="img" href="screenshots/homepage.jpg" target="_blank"><img src="screenshots/homepage.jpg" alt="Progressive Web App screenshot" loading="lazy"></a><div class="cap"><strong>Progressive Web App</strong><br><span class="role">Works on any screen size, installs like an app, and opens previously loaded content offline.</span></div></div>
+      <div class="shot"><a class="img" href="screenshots/qr-arrival-recording.jpg" target="_blank"><img src="screenshots/qr-arrival-recording.jpg" alt="QR-Based Arrival Recording screenshot" loading="lazy"></a><div class="cap"><strong>QR-Based Arrival Recording</strong><br><span class="role">Records tourist arrivals by scanning QR codes at selected locations.</span></div></div>
+      <div class="shot"><a class="img" href="screenshots/visitor-feedback.jpg" target="_blank"><img src="screenshots/visitor-feedback.jpg" alt="Visitor Feedback screenshot" loading="lazy"></a><div class="cap"><strong>Visitor Feedback</strong><br><span class="role">Visitors rate and comment on their experience; CHATO manages the responses.</span></div></div>
+    </div>
+    <h3 class="sub">More Screenshots</h3>
+    <div class="grid">
+      <div class="shot"><a class="img" href="screenshots/login.jpg" target="_blank"><img src="screenshots/login.jpg" alt="Login screenshot" loading="lazy"></a><div class="cap"><strong>Login</strong><br><span class="role">Secure sign-in for all user roles.</span></div></div>
+      <div class="shot"><a class="img" href="screenshots/user-management.jpg" target="_blank"><img src="screenshots/user-management.jpg" alt="User Management screenshot" loading="lazy"></a><div class="cap"><strong>User Management</strong><br><span class="role">Admins manage accounts and roles.</span></div></div>
+      <div class="shot"><a class="img" href="screenshots/officer-dashboard.jpg" target="_blank"><img src="screenshots/officer-dashboard.jpg" alt="Officer Dashboard screenshot" loading="lazy"></a><div class="cap"><strong>Officer Dashboard</strong><br><span class="role">Review queue and content library for CHATO officers.</span></div></div>
+      <div class="shot"><a class="img" href="screenshots/lbo-applications-review.jpg" target="_blank"><img src="screenshots/lbo-applications-review.jpg" alt="LBO Applications Review screenshot" loading="lazy"></a><div class="cap"><strong>LBO Applications Review</strong><br><span class="role">CHATO reviews Local Business Owner applications.</span></div></div>
+      <div class="shot"><a class="img" href="screenshots/lbo-dashboard.jpg" target="_blank"><img src="screenshots/lbo-dashboard.jpg" alt="Local Business Owner Dashboard screenshot" loading="lazy"></a><div class="cap"><strong>Local Business Owner Dashboard</strong><br><span class="role">Business owners track their listing, reports and visitor records.</span></div></div>
+      <div class="shot"><a class="img" href="screenshots/itinerary-builder.jpg" target="_blank"><img src="screenshots/itinerary-builder.jpg" alt="Itinerary Builder screenshot" loading="lazy"></a><div class="cap"><strong>Itinerary Builder</strong><br><span class="role">Visitors plan a trip step by step.</span></div></div>
     </div>
     <h3 class="sub">User Roles</h3>
     <div class="facts">
