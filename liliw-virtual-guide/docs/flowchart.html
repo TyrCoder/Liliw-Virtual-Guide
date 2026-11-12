@@ -1,3 +1,8 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Liliw System Flows</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&amp;family=Outfit:wght@400;500;600;700;800&amp;family=Plus+Jakarta+Sans:wght@400;500;600;700&amp;display=swap">
@@ -302,6 +307,65 @@
     .plate{box-shadow:none;break-inside:avoid;}
   }
 </style>
+<style>
+  /* ── readability overrides: diagrams fit the column, click to enlarge ── */
+  .plate{overflow:hidden;position:relative;}
+  .plate-inner{min-width:0;}
+  pre.mermaid{text-align:center;cursor:zoom-in;}
+  pre.mermaid:not([data-processed]){visibility:hidden;min-height:120px;}
+  pre.mermaid,pre.mermaid svg,pre.mermaid svg *{font-family:'Plus Jakarta Sans', sans-serif!important;}
+  pre.mermaid svg{display:block;margin:0 auto;width:100%!important;height:auto!important;}
+  .erd-img{max-width:100%!important;max-height:75vh;width:auto;height:auto;margin:0 auto;cursor:zoom-in;}
+  .zoom-hint{
+    position:absolute;top:10px;right:10px;z-index:2;
+    display:inline-flex;align-items:center;gap:6px;
+    background:var(--navy);color:var(--paper);border:none;border-radius:999px;
+    padding:6px 12px;font-family:var(--font-heading);font-size:12px;font-weight:600;cursor:pointer;
+    box-shadow:0 4px 12px -4px rgba(8,44,107,.45);
+  }
+  .zoom-hint:hover{background:var(--navy-deep);}
+  @media print{ .zoom-hint{display:none;} pre.mermaid,.erd-img{cursor:default;} }
+
+  /* lightbox */
+  .lb{position:fixed;inset:0;z-index:100;background:rgba(10,18,40,.82);display:flex;flex-direction:column;}
+  .lb[hidden]{display:none!important;}
+  .lb-bar{
+    display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--navy-deep);color:var(--paper);
+    font-family:var(--font-heading);font-size:14px;flex:none;
+  }
+  .lb-title{flex:1;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .lb-bar button{
+    background:rgba(255,255,255,.12);color:var(--paper);border:1px solid rgba(255,255,255,.25);
+    border-radius:8px;min-width:38px;height:36px;padding:0 10px;font-size:15px;font-weight:700;cursor:pointer;
+    font-family:var(--font-heading);
+  }
+  .lb-bar button:hover{background:rgba(255,255,255,.22);}
+  .lb-zoom{min-width:52px;text-align:center;font-variant-numeric:tabular-nums;font-size:13px;opacity:.85;}
+  .lb-stage{flex:1;overflow:auto;padding:24px;cursor:grab;}
+  .lb-stage.dragging{cursor:grabbing;}
+  .lb-canvas{background:#fff;border-radius:10px;padding:24px;margin:0 auto;width:max-content;}
+  .lb-canvas svg,.lb-canvas svg *{font-family:'Plus Jakarta Sans', sans-serif!important;}
+  .lb-canvas svg,.lb-canvas img{display:block;max-width:none!important;height:auto!important;}
+  @media (max-width:600px){
+    .lb-title{display:none;}
+    .lb-stage{padding:10px;}
+    .lb-canvas{padding:12px;}
+  }
+
+  /* small screens */
+  @media (max-width:600px){
+    .plate{padding:40px 10px 14px;}
+    .figure h3{font-size:20px;}
+    .masthead{padding:44px 16px 32px;}
+    .print-bar{top:auto;bottom:16px;}
+    table.schema-table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;}
+    table.schema-table th,table.schema-table td{padding:6px 8px;}
+    table.hw-table td:first-child{white-space:normal;}
+    .col-name{overflow-wrap:anywhere;}
+  }
+</style>
+</head>
+<body>
 
 <div class="print-bar">
   <button type="button" onclick="window.print()">
@@ -360,17 +424,17 @@
       <p class="desc">How a visit proceeds from arrival to the major path each kind of user takes. Browsing, stories, the map, and the chatbot need no account; an account is the fork into a role-specific dashboard.</p>
       <div class="plate"><div class="plate-inner">
 <pre class="mermaid">
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'14px'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':46}} }%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'15px'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':46}} }%%
 flowchart TD
     Start([Visitor opens the website]) --> Browse{Has an account?}
     Browse -- No --> Public[Browse attractions, stories, map, chatbot&mdash;no account needed]
-    Public --> WantAccount{Wants to check in,\nsave trips, or review?}
+    Public --> WantAccount{Wants to check in,<br/>save trips, or review?}
     WantAccount -- No --> End1([Continues browsing])
     WantAccount -- Yes --> Register[Create an account]
     Register --> Login
     Browse -- Yes --> Login[Sign in]
-    Login --> RoleCheck{What role does\nthis account have?}
-    RoleCheck -- Tourist/Visitor --> TouristFlow[Explore, plan trips,\ncheck in, earn points]
+    Login --> RoleCheck{What role does<br/>this account have?}
+    RoleCheck -- Tourist/Visitor --> TouristFlow[Explore, plan trips,<br/>check in, earn points]
     RoleCheck -- LBO --> LBOFlow[LBO Dashboard]
     RoleCheck -- CHATO Editor --> EditorFlow[CMS: create/edit content]
     RoleCheck -- CHATO Officer --> OfficerFlow[CMS: review/approve content]
@@ -399,13 +463,13 @@ flowchart TD
       <p class="desc">Password and username rules are enforced identically on the form and on the server. A signed-in account is routed by its role &mdash; every staff role lands on the Admin Dashboard, from which the CMS is reached.</p>
       <div class="plate"><div class="plate-inner">
 <pre class="mermaid">
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'14px'},'flowchart':{'curve':'basis','nodeSpacing':34,'rankSpacing':44}} }%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'15px'},'flowchart':{'curve':'basis','nodeSpacing':34,'rankSpacing':44}} }%%
 flowchart TD
-    A([Start]) --> B{New or\nreturning user?}
+    A([Start]) --> B{New or<br/>returning user?}
     B -- New --> C[Fill in username, email, password]
-    C --> D{Meets password\n&amp; username rules?}
+    C --> D{Meets password<br/>&amp; username rules?}
     D -- No --> C
-    D -- Yes --> E[Account created\nrole: Tourist]
+    D -- Yes --> E[Account created<br/>role: Tourist]
     E --> F[Redirect to homepage]
     B -- Returning --> G[Enter email &amp; password]
     G --> H{Credentials valid?}
@@ -418,7 +482,7 @@ flowchart TD
     H -- Yes --> M{Account role?}
     M -- Tourist --> F
     M -- LBO --> N[Redirect to /lbo dashboard]
-    M -- Editor/Officer/Admin --> O[Redirect to /admin dashboard\nCMS reached from there]
+    M -- Editor/Officer/Admin --> O[Redirect to /admin dashboard<br/>CMS reached from there]
 
     classDef default fill:#FFFFFF,color:#1A2340,stroke:#0B3D91,stroke-width:1.5px
     classDef term fill:#082C6B,color:#FBF6EA,stroke:#082C6B,stroke-width:2px
@@ -440,33 +504,33 @@ flowchart TD
       <p class="desc">Applies uniformly to all nine content types. Authoring and publishing are separate roles by design &mdash; an Officer reviews against a snapshot of the last approved version, and editing live content sends it back to Draft.</p>
       <div class="plate"><div class="plate-inner">
 <pre class="mermaid">
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'14px'},'flowchart':{'curve':'basis','nodeSpacing':32,'rankSpacing':42}} }%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'15px'},'flowchart':{'curve':'basis','nodeSpacing':32,'rankSpacing':42}} }%%
 flowchart TD
-    A([Editor opens the CMS]) --> B[Create new entry\nor edit existing one]
-    B --> C[Fill required fields,\nupload photos]
-    C --> D{Automatic validation\npasses?}
+    A([Editor opens the CMS]) --> B[Create new entry<br/>or edit existing one]
+    B --> C[Fill required fields,<br/>upload photos]
+    C --> D{Automatic validation<br/>passes?}
     D -- No --> C
     D -- Yes --> E[Save as Draft]
-    E --> F{Editor ready\nto publish?}
+    E --> F{Editor ready<br/>to publish?}
     F -- Not yet --> E
     F -- Yes --> G[Submit for Review]
     G --> H[Status: Pending]
-    H --> I([Officer opens\nContent Approvals])
-    I --> J[View entry &mdash; compared\nagainst last approved\nversion if an edit]
+    H --> I([Officer opens<br/>Content Approvals])
+    I --> J[View entry &mdash; compared<br/>against last approved<br/>version if an edit]
     J --> K{Approve or Reject?}
     K -- Approve --> L[Status: Approved]
-    L --> M[Published live on\nthe public site]
-    M --> N[Snapshot saved for\nfuture comparison]
+    L --> M[Published live on<br/>the public site]
+    M --> N[Snapshot saved for<br/>future comparison]
     K -- Reject --> O[Write rejection reason]
     O --> P[Status: Rejected]
-    P --> Q([Editor sees the reason,\nrevises the entry])
+    P --> Q([Editor sees the reason,<br/>revises the entry])
     Q --> C
-    M --> R{Editor edits the\npublished entry later?}
-    R -- Yes --> S[Status reverts to Draft\nremoved from public site]
+    M --> R{Editor edits the<br/>published entry later?}
+    R -- Yes --> S[Status reverts to Draft<br/>removed from public site]
     S --> F
     R -- No --> Endx([Stays live])
-    L --> T{Admin/Officer\narchives it?}
-    T -- Yes --> U[Status: Archived\nhistory preserved]
+    L --> T{Admin/Officer<br/>archives it?}
+    T -- Yes --> U[Status: Archived<br/>history preserved]
     U --> V{Restored later?}
     V -- Yes --> E
 
@@ -492,28 +556,28 @@ flowchart TD
       <p class="desc">A check-in is credited only after the visitor's location is confirmed against the attraction's coordinates. That single credited visit is what unlocks a review, ticks an itinerary item, and counts toward achievements.</p>
       <div class="plate"><div class="plate-inner">
 <pre class="mermaid">
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'14px'},'flowchart':{'curve':'basis','nodeSpacing':34,'rankSpacing':44}} }%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'15px'},'flowchart':{'curve':'basis','nodeSpacing':34,'rankSpacing':44}} }%%
 flowchart TD
-    A([Visitor arrives at a listed\nattraction or business]) --> B[Finds the printed\nQR poster at the entrance]
-    B --> C[Opens Scan and allows\ncamera access]
+    A([Visitor arrives at a listed<br/>attraction or business]) --> B[Finds the printed<br/>QR poster at the entrance]
+    B --> C[Opens Scan and allows<br/>camera access]
     C --> D[Scans the QR code]
     D --> E{Signed in?}
-    E -- No --> F[Prompted to sign in\nor create an account]
+    E -- No --> F[Prompted to sign in<br/>or create an account]
     F --> D
-    E -- Yes --> G[System reads the visitor's\ncurrent location]
-    G --> H{Within the required\ndistance of the attraction?}
-    H -- No --> I["Check-in rejected:\n'must be at the location'"]
-    H -- Yes --> J{Already checked in\nhere recently?}
-    J -- Yes --> K[Duplicate check-in\nprevented]
+    E -- Yes --> G[System reads the visitor's<br/>current location]
+    G --> H{Within the required<br/>distance of the attraction?}
+    H -- No --> I["Check-in rejected:<br/>'must be at the location'"]
+    H -- Yes --> J{Already checked in<br/>here recently?}
+    J -- Yes --> K[Duplicate check-in<br/>prevented]
     J -- No --> L[Visit recorded]
     L --> M[Points awarded]
-    M --> N{Achievement\nthreshold reached?}
-    N -- Yes --> O[Achievement unlocked\nand shown to the visitor]
+    M --> N{Achievement<br/>threshold reached?}
+    N -- Yes --> O[Achievement unlocked<br/>and shown to the visitor]
     N -- No --> P[Continue]
-    L --> Q{Place is on a\nsaved itinerary?}
-    Q -- Yes --> R[Itinerary checklist item\nautomatically ticked]
+    L --> Q{Place is on a<br/>saved itinerary?}
+    Q -- Yes --> R[Itinerary checklist item<br/>automatically ticked]
     Q -- No --> P
-    L --> S[Review form becomes\navailable for this place]
+    L --> S[Review form becomes<br/>available for this place]
 
     classDef default fill:#FFFFFF,color:#1A2340,stroke:#0B3D91,stroke-width:1.5px
     classDef term fill:#082C6B,color:#FBF6EA,stroke:#082C6B,stroke-width:2px
@@ -537,29 +601,29 @@ flowchart TD
       <p class="desc">Applying requires no account &mdash; it is a public form. A signed-in tourist can instead apply from their profile. Either way, approval upgrades the account to LBO and future corrections go through a reviewed change request, never a direct edit.</p>
       <div class="plate"><div class="plate-inner">
 <pre class="mermaid">
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'14px'},'flowchart':{'curve':'basis','nodeSpacing':34,'rankSpacing':44}} }%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'15px'},'flowchart':{'curve':'basis','nodeSpacing':34,'rankSpacing':44}} }%%
 flowchart TD
-    A([Prospective business owner]) --> D[Opens Apply as a Business\nno account required]
-    D --> E[Fill in business name, owner,\ncontact, address, type,\npermit number - optional]
+    A([Prospective business owner]) --> D[Opens Apply as a Business<br/>no account required]
+    D --> E[Fill in business name, owner,<br/>contact, address, type,<br/>permit number - optional]
     E --> F[Submit application]
     F --> G[Status: Pending]
-    A2([Already a signed-in tourist]) --> A3[Applies from\nProfile - Apply as LBO]
+    A2([Already a signed-in tourist]) --> A3[Applies from<br/>Profile - Apply as LBO]
     A3 --> E
-    G --> H([CHATO Officer reviews\nthe application])
+    G --> H([CHATO Officer reviews<br/>the application])
     H --> I{Approve?}
     I -- No --> J[Application rejected]
-    I -- Yes --> K[Status: Approved\nrole upgraded to LBO]
-    K --> L[Owner signs in,\nauto-redirected to\nLBO Dashboard]
-    L --> M[Views business details,\npublic listing, QR poster]
+    I -- Yes --> K[Status: Approved<br/>role upgraded to LBO]
+    K --> L[Owner signs in,<br/>auto-redirected to<br/>LBO Dashboard]
+    L --> M[Views business details,<br/>public listing, QR poster]
     M --> N{Needs a correction?}
     N -- Yes --> O[Submits a Change Request]
     O --> P([CHATO reviews the request])
     P --> Q{Approved?}
     Q -- Yes --> R[Public listing updated]
     Q -- No --> M
-    M --> S[Submits monthly\nvisitor records]
+    M --> S[Submits monthly<br/>visitor records]
     M --> T{Wants a 360-degree tour?}
-    T -- Yes --> U[Requests a virtual tour\nCHATO schedules a shoot]
+    T -- Yes --> U[Requests a virtual tour<br/>CHATO schedules a shoot]
 
     classDef default fill:#FFFFFF,color:#1A2340,stroke:#0B3D91,stroke-width:1.5px
     classDef term fill:#082C6B,color:#FBF6EA,stroke:#082C6B,stroke-width:2px
@@ -583,24 +647,24 @@ flowchart TD
       <p class="desc">The planner is grounded &mdash; it selects only from real, published places, never invented ones. Road distance is calculated by an external routing service when reachable, and falls back to a labelled straight-line estimate when it is not.</p>
       <div class="plate"><div class="plate-inner">
 <pre class="mermaid">
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'14px'},'flowchart':{'curve':'basis','nodeSpacing':34,'rankSpacing':44}} }%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'15px'},'flowchart':{'curve':'basis','nodeSpacing':34,'rankSpacing':44}} }%%
 flowchart TD
-    A(["Visitor opens Itinerary,\nchooses 'Plan with AI'"]) --> B[Specifies trip length\nand interests]
-    B --> C[Request sent to the\nAI planning service]
-    C --> D[AI selects only from real,\npublished attractions,\ndining, and activities]
-    D --> E{AI response\nvalid and complete?}
-    E -- No --> F[Automatic retry with\nadjusted parameters]
+    A(["Visitor opens Itinerary,<br/>chooses 'Plan with AI'"]) --> B[Specifies trip length<br/>and interests]
+    B --> C[Request sent to the<br/>AI planning service]
+    C --> D[AI selects only from real,<br/>published attractions,<br/>dining, and activities]
+    D --> E{AI response<br/>valid and complete?}
+    E -- No --> F[Automatic retry with<br/>adjusted parameters]
     F --> D
-    E -- Yes --> G[Day-by-day itinerary\ngenerated]
-    G --> H[Road distances calculated\nbetween consecutive stops]
-    H --> I{Routing service\navailable?}
-    I -- Yes --> J[Road-accurate route drawn,\none-way streets respected]
-    I -- No --> K[Straight-line distance shown\nas a fallback estimate]
-    J --> L([Itinerary displayed\nwith map and schedule])
+    E -- Yes --> G[Day-by-day itinerary<br/>generated]
+    G --> H[Road distances calculated<br/>between consecutive stops]
+    H --> I{Routing service<br/>available?}
+    I -- Yes --> J[Road-accurate route drawn,<br/>one-way streets respected]
+    I -- No --> K[Straight-line distance shown<br/>as a fallback estimate]
+    J --> L([Itinerary displayed<br/>with map and schedule])
     K --> L
     L --> M{Visitor saves it?}
-    M -- Yes --> N[Saved to profile,\nbecomes a checklist]
-    M -- No --> O([Itinerary remains\nunsaved])
+    M -- Yes --> N[Saved to profile,<br/>becomes a checklist]
+    M -- No --> O([Itinerary remains<br/>unsaved])
 
     classDef default fill:#FFFFFF,color:#1A2340,stroke:#0B3D91,stroke-width:1.5px
     classDef term fill:#082C6B,color:#FBF6EA,stroke:#082C6B,stroke-width:2px
@@ -622,15 +686,15 @@ flowchart TD
       <p class="desc">A saved itinerary &mdash; AI-generated or curated &mdash; becomes a tracker. Each stop is checked off only by a real credited visit, the same fact recorded in Figure 4, never by hand.</p>
       <div class="plate"><div class="plate-inner">
 <pre class="mermaid">
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'14px'},'flowchart':{'curve':'basis','nodeSpacing':34,'rankSpacing':44}} }%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'15px'},'flowchart':{'curve':'basis','nodeSpacing':34,'rankSpacing':44}} }%%
 flowchart TD
-    A([Visitor saves an itinerary]) --> B[Each stop listed as\na checklist item]
-    B --> C{Visitor checks in\nvia QR at a stop?}
+    A([Visitor saves an itinerary]) --> B[Each stop listed as<br/>a checklist item]
+    B --> C{Visitor checks in<br/>via QR at a stop?}
     C -- No --> D[Item remains unchecked]
-    C -- Yes --> E[System matches the check-in\nto the itinerary stop]
-    E --> F[Checklist item marked\nas visited]
-    F --> G{All stops\nchecked off?}
-    G -- No --> H([Visitor continues\nthe itinerary])
+    C -- Yes --> E[System matches the check-in<br/>to the itinerary stop]
+    E --> F[Checklist item marked<br/>as visited]
+    F --> G{All stops<br/>checked off?}
+    G -- No --> H([Visitor continues<br/>the itinerary])
     G -- Yes --> I([Itinerary complete])
 
     classDef default fill:#FFFFFF,color:#1A2340,stroke:#0B3D91,stroke-width:1.5px
@@ -653,18 +717,18 @@ flowchart TD
       <p class="desc">An owner never edits their own public listing. Every correction &mdash; a phone number, an hour, a photo &mdash; is a request CHATO reviews first, keeping the office as the single source of truth for what is published.</p>
       <div class="plate"><div class="plate-inner">
 <pre class="mermaid">
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'14px'},'flowchart':{'curve':'basis','nodeSpacing':34,'rankSpacing':44}} }%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'15px'},'flowchart':{'curve':'basis','nodeSpacing':34,'rankSpacing':44}} }%%
 flowchart TD
-    A([LBO notices incorrect\ninformation on their listing]) --> B[Opens Requests tab\nin the LBO Dashboard]
-    B --> C[Selects the field to change:\nname, hours, fee, photos, etc.]
+    A([LBO notices incorrect<br/>information on their listing]) --> B[Opens Requests tab<br/>in the LBO Dashboard]
+    B --> C[Selects the field to change:<br/>name, hours, fee, photos, etc.]
     C --> D[Describes the correction]
     D --> E[Submits the change request]
     E --> F[Status: Pending]
-    F --> G([CHATO reviews the request\nagainst the current listing])
+    F --> G([CHATO reviews the request<br/>against the current listing])
     G --> H{Approve?}
-    H -- Yes --> I[Public listing updated,\nrequest marked Resolved]
-    H -- No --> J[Request declined\nwith a reason]
-    I --> K([LBO sees the update\nreflected on their dashboard])
+    H -- Yes --> I[Public listing updated,<br/>request marked Resolved]
+    H -- No --> J[Request declined<br/>with a reason]
+    I --> K([LBO sees the update<br/>reflected on their dashboard])
     J --> K
 
     classDef default fill:#FFFFFF,color:#1A2340,stroke:#0B3D91,stroke-width:1.5px
@@ -743,12 +807,12 @@ flowchart LR
       <p class="desc">The application in four layers. Shading deepens toward the data it protects; external services sit outside the stack in a dashed outline, since the system depends on them but does not own them.</p>
       <div class="plate"><div class="plate-inner">
 <pre class="mermaid">
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#0B3D91','tertiaryColor':'#FBF6EA','fontSize':'14px'},'flowchart':{'curve':'basis','nodeSpacing':34,'rankSpacing':30}} }%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#0B3D91','tertiaryColor':'#FBF6EA','fontSize':'15px'},'flowchart':{'curve':'basis','nodeSpacing':34,'rankSpacing':30}} }%%
 flowchart TD
-    P["PRESENTATION LAYER\nPages, components, offline shell (PWA)"]
-    AP["APPLICATION LAYER\nAPI endpoints -- business rules, role checks, validation"]
-    D["DATA LAYER\nRelational database -- persistence, access control"]
-    X["EXTERNAL SERVICES\nAI inference &middot; Maps &middot; Media hosting &middot; Email"]
+    P["PRESENTATION LAYER<br/>Pages, components, offline shell (PWA)"]
+    AP["APPLICATION LAYER<br/>API endpoints -- business rules, role checks, validation"]
+    D["DATA LAYER<br/>Relational database -- persistence, access control"]
+    X["EXTERNAL SERVICES<br/>AI inference &middot; Maps &middot; Media hosting &middot; Email"]
     P --> AP --> D --> X
 
     classDef default fill:#FFFFFF,color:#1A2340,stroke:#0B3D91,stroke-width:1.5px
@@ -771,10 +835,10 @@ flowchart TD
       <p class="desc">Every request enters through one door. The application is the only thing that talks to the database directly; everything past it is a third-party service the application calls out to, never the other way around.</p>
       <div class="plate"><div class="plate-inner">
 <pre class="mermaid">
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'14px'},'flowchart':{'curve':'basis','nodeSpacing':30,'rankSpacing':42}} }%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#1A2340','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'15px'},'flowchart':{'curve':'basis','nodeSpacing':30,'rankSpacing':42}} }%%
 flowchart TD
     Browser([Visitor's browser]) -- HTTPS --> Edge[Hosting edge network]
-    Edge --> App["Application\npage rendering + API endpoints"]
+    Edge --> App["Application<br/>page rendering + API endpoints"]
     App --> DB[(Database)]
     App --> AI[AI service]
     App --> Maps[Maps service]
@@ -805,7 +869,7 @@ flowchart TD
         <p class="erd-panel-desc">The two identity surfaces, joined only by a shared email &mdash; there is no foreign key between them.</p>
         <div class="plate"><div class="plate-inner">
 <a class="erd-img-link" href="erd/identity.png" target="_blank" rel="noopener"><img class="erd-img" src="erd/identity.png" alt="identity entity relationship diagram" loading="lazy"></a>
-        <p class="erd-img-hint">Click to open full size in a new tab &#8599;</p>
+        <p class="erd-img-hint">Click the diagram or <b>Enlarge</b> to zoom in</p>
         </div></div>
         <p class="plate-caption"><b>Figure 12.1.</b> Identity &mdash; 2 tables.</p>
       </div>
@@ -814,7 +878,7 @@ flowchart TD
         <p class="erd-panel-desc">Nine publishable content types, plus the two polymorphic tables that attach to any of them by a <code>content_type</code>/<code>content_id</code> pair instead of a formal foreign key. Only <code>cms_attractions</code> is drawn connected below to keep the diagram legible &mdash; the identical pattern also links <code>cms_events</code>, <code>cms_news</code>, <code>cms_art_forms</code>, <code>cms_artisans</code>, <code>cms_stories</code>, and <code>cms_community_events</code>. <code>cms_faqs</code> and <code>cms_itineraries</code> stand alone &mdash; nothing attaches media or snapshots to them.</p>
         <div class="plate"><div class="plate-inner">
 <a class="erd-img-link" href="erd/content.png" target="_blank" rel="noopener"><img class="erd-img" src="erd/content.png" alt="content entity relationship diagram" loading="lazy"></a>
-        <p class="erd-img-hint">Click to open full size in a new tab &#8599;</p>
+        <p class="erd-img-hint">Click the diagram or <b>Enlarge</b> to zoom in</p>
         </div></div>
         <p class="plate-caption"><b>Figure 12.2.</b> Content &mdash; 11 tables.</p>
       </div>
@@ -823,7 +887,7 @@ flowchart TD
         <p class="erd-panel-desc">The Local Business Owner track. All three follow-on request tables key off the applicant’s email, not the application’s id.</p>
         <div class="plate"><div class="plate-inner">
 <a class="erd-img-link" href="erd/business.png" target="_blank" rel="noopener"><img class="erd-img" src="erd/business.png" alt="business entity relationship diagram" loading="lazy"></a>
-        <p class="erd-img-hint">Click to open full size in a new tab &#8599;</p>
+        <p class="erd-img-hint">Click the diagram or <b>Enlarge</b> to zoom in</p>
         </div></div>
         <p class="plate-caption"><b>Figure 12.3.</b> Business (LBO) &mdash; 4 tables.</p>
       </div>
@@ -832,7 +896,7 @@ flowchart TD
         <p class="erd-panel-desc">The tourist-facing loop. <code>achievements&rarr;user_achievements</code> and <code>rewards&rarr;reward_redemptions</code> are real foreign keys; everything back to a user or an attraction is enforced by application code, matched on the attraction’s public <code>&lt;type&gt;-&lt;uuid&gt;</code> id rather than a database reference. <code>profiles</code> and <code>cms_attractions</code> are shown thin here &mdash; see the Identity and Content panels for their own columns.</p>
         <div class="plate"><div class="plate-inner">
 <a class="erd-img-link" href="erd/engagement.png" target="_blank" rel="noopener"><img class="erd-img" src="erd/engagement.png" alt="engagement entity relationship diagram" loading="lazy"></a>
-        <p class="erd-img-hint">Click to open full size in a new tab &#8599;</p>
+        <p class="erd-img-hint">Click the diagram or <b>Enlarge</b> to zoom in</p>
         </div></div>
         <p class="plate-caption"><b>Figure 12.4.</b> Engagement &mdash; 9 tables.</p>
       </div>
@@ -841,7 +905,7 @@ flowchart TD
         <p class="erd-panel-desc">Public sign-ups, forms, and submissions. <code>event_forms&rarr;event_form_responses</code> and <code>cms_community_events&rarr;community_event_signups</code> are real foreign keys; the older <code>event_signups</code> table matches events only by convention. <code>participation_requests</code>, <code>community_submissions</code>, <code>submissions</code>, and <code>newsletter_subscribers</code> stand alone, with no declared relationship to any other table.</p>
         <div class="plate"><div class="plate-inner">
 <a class="erd-img-link" href="erd/participation.png" target="_blank" rel="noopener"><img class="erd-img" src="erd/participation.png" alt="participation entity relationship diagram" loading="lazy"></a>
-        <p class="erd-img-hint">Click to open full size in a new tab &#8599;</p>
+        <p class="erd-img-hint">Click the diagram or <b>Enlarge</b> to zoom in</p>
         </div></div>
         <p class="plate-caption"><b>Figure 12.5.</b> Participation &mdash; 8 tables.</p>
       </div>
@@ -850,7 +914,7 @@ flowchart TD
         <p class="erd-panel-desc">Logging, session, inbox, and one-time-code tables that support the running system. None declare a foreign key to anything else &mdash; each is written and read independently by the feature that owns it.</p>
         <div class="plate"><div class="plate-inner">
 <a class="erd-img-link" href="erd/operations.png" target="_blank" rel="noopener"><img class="erd-img" src="erd/operations.png" alt="operations entity relationship diagram" loading="lazy"></a>
-        <p class="erd-img-hint">Click to open full size in a new tab &#8599;</p>
+        <p class="erd-img-hint">Click the diagram or <b>Enlarge</b> to zoom in</p>
         </div></div>
         <p class="plate-caption"><b>Figure 12.6.</b> Operations &mdash; 7 tables.</p>
       </div>
@@ -859,7 +923,7 @@ flowchart TD
         <p class="erd-panel-desc">Carried over from the CMS this project replaced. Nothing in the current application queries or references this table.</p>
         <div class="plate"><div class="plate-inner">
 <a class="erd-img-link" href="erd/legacy.png" target="_blank" rel="noopener"><img class="erd-img" src="erd/legacy.png" alt="legacy entity relationship diagram" loading="lazy"></a>
-        <p class="erd-img-hint">Click to open full size in a new tab &#8599;</p>
+        <p class="erd-img-hint">Click the diagram or <b>Enlarge</b> to zoom in</p>
         </div></div>
         <p class="plate-caption"><b>Figure 12.7.</b> Legacy (unused) &mdash; 1 table.</p>
       </div>
@@ -1707,7 +1771,7 @@ flowchart TD
       <p class="desc">Every actor in the system and the actions available to them, drawn from the module descriptions in System Manual &sect;7. An Administrator is shown sharing the Editor's and Officer's use cases rather than repeating them, matching how the role actually works &mdash; full authoring and publishing power in one account.</p>
       <div class="plate"><div class="plate-inner">
 <a class="erd-img-link" href="figures/usecase.png" target="_blank" rel="noopener"><img class="erd-img" src="figures/usecase.png" alt="Use case diagram" loading="lazy"></a>
-        <p class="erd-img-hint">Click to open full size in a new tab &#8599;</p>
+        <p class="erd-img-hint">Click the diagram or <b>Enlarge</b> to zoom in</p>
       </div></div>
       <p class="plate-caption"><b>Figure 14.</b> Use Case Diagram &mdash; 5 actors, 22 use cases.</p>
     </section>
@@ -1718,18 +1782,18 @@ flowchart TD
       <p class="desc">The system as a single process (Level 0 of the data-flow model), showing only what crosses its boundary: the three human entities and the four external services from System Manual &sect;2.2 and &sect;4.3. Everything inside the boundary &mdash; every module, every table &mdash; is expanded in the diagrams that follow.</p>
       <div class="plate"><div class="plate-inner">
 <pre class="mermaid">
-%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#0B3D91','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'14px'},'flowchart':{'curve':'basis','nodeSpacing':50,'rankSpacing':90}} }%%
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#0B3D91','tertiaryColor':'#FBF6EA','edgeLabelBackground':'#FBF6EA','fontSize':'15px'},'flowchart':{'curve':'basis','nodeSpacing':50,'rankSpacing':90}} }%%
 flowchart LR
     Tourist[Tourist / Visitor]
     LBO[Local Business Owner]
-    Staff[CHATO Staff\nEditor / Officer / Administrator]
+    Staff[CHATO Staff<br/>Editor / Officer / Administrator]
 
-    SYS((("0\nLiliw Virtual\nGuide System")))
+    SYS((("0<br/>Liliw Virtual<br/>Guide System")))
 
-    AI([AI Service\nGroq])
-    Maps([Maps Service\nMapbox])
-    Media([Media Host\nCloudinary])
-    Email([Email Service\nGmail SMTP])
+    AI([AI Service<br/>Groq])
+    Maps([Maps Service<br/>Mapbox])
+    Media([Media Host<br/>Cloudinary])
+    Email([Email Service<br/>Gmail SMTP])
 
     Tourist <-- "browsing & engagement data" --> SYS
     LBO <-- "applications & business records" --> SYS
@@ -1764,14 +1828,14 @@ flowchart LR
     LBO[Local Business Owner]
     Staff[CHATO Staff]
 
-    P1(("1.0\nPublic Tourism\nPortal"))
-    P4(("4.0\nVisitor\nEngagement"))
-    P5(("5.0\nAI Services"))
-    P6(("6.0\nItinerary &\nMapping"))
-    P7(("7.0\nImmersive\nMedia"))
-    P3(("3.0\nLBO Portal"))
-    P2(("2.0\nContent\nManagement"))
-    P8(("8.0\nAdmin &\nAnalytics"))
+    P1(("1.0<br/>Public Tourism<br/>Portal"))
+    P4(("4.0<br/>Visitor<br/>Engagement"))
+    P5(("5.0<br/>AI Services"))
+    P6(("6.0<br/>Itinerary &<br/>Mapping"))
+    P7(("7.0<br/>Immersive<br/>Media"))
+    P3(("3.0<br/>LBO Portal"))
+    P2(("2.0<br/>Content<br/>Management"))
+    P8(("8.0<br/>Admin &<br/>Analytics"))
 
     D2[(D2 Content)]
     D4[(D4 Engagement)]
@@ -1825,16 +1889,16 @@ flowchart LR
 <pre class="mermaid">
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Plus Jakarta Sans, sans-serif','primaryColor':'#FFFFFF','primaryTextColor':'#1A2340','primaryBorderColor':'#0B3D91','lineColor':'#0B3D91','tertiaryColor':'#FBF6EA','fontSize':'13px'},'flowchart':{'curve':'basis','nodeSpacing':10,'rankSpacing':80}} }%%
 flowchart LR
-    ROOT["0.0\nLiliw Virtual Guide System"]
+    ROOT["0.0<br/>Liliw Virtual Guide System"]
 
-    M1["1.0\nPublic Tourism Portal"]
-    M2["2.0\nContent Management"]
-    M3["3.0\nLBO Portal"]
-    M4["4.0\nVisitor Engagement"]
-    M5["5.0\nAI Services"]
-    M6["6.0\nItinerary & Mapping"]
-    M7["7.0\nImmersive Media"]
-    M8["8.0\nAdmin & Analytics"]
+    M1["1.0<br/>Public Tourism Portal"]
+    M2["2.0<br/>Content Management"]
+    M3["3.0<br/>LBO Portal"]
+    M4["4.0<br/>Visitor Engagement"]
+    M5["5.0<br/>AI Services"]
+    M6["6.0<br/>Itinerary & Mapping"]
+    M7["7.0<br/>Immersive Media"]
+    M8["8.0<br/>Admin & Analytics"]
 
     ROOT --> M1
     ROOT --> M2
@@ -2089,3 +2153,125 @@ flowchart LR
     <span>Municipality of Liliw, Laguna</span>
   </div>
 </footer>
+
+<div class="lb" id="lb" hidden role="dialog" aria-modal="true" aria-label="Enlarged diagram">
+  <div class="lb-bar">
+    <span class="lb-title" id="lb-title"></span>
+    <button type="button" id="lb-out" aria-label="Zoom out">&minus;</button>
+    <span class="lb-zoom" id="lb-pct">100%</span>
+    <button type="button" id="lb-in" aria-label="Zoom in">+</button>
+    <button type="button" id="lb-fit">Fit</button>
+    <button type="button" id="lb-close" aria-label="Close">&times;</button>
+  </div>
+  <div class="lb-stage" id="lb-stage"><div class="lb-canvas" id="lb-canvas"></div></div>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'loose',
+    flowchart: { useMaxWidth: true, htmlLabels: true, wrappingWidth: 220 },
+  });
+
+  // measure labels with the real font, otherwise text gets clipped
+  if (document.fonts) {
+    try {
+      await Promise.race([
+        Promise.all([document.fonts.load('15px "Plus Jakarta Sans"'), document.fonts.load('600 15px "Plus Jakarta Sans"')]),
+        new Promise(r => setTimeout(r, 2500)),
+      ]);
+      await document.fonts.ready;
+    } catch (e) {}
+  }
+  await mermaid.run({ querySelector: 'pre.mermaid' });
+
+  // ── lightbox ──────────────────────────────────────────────
+  const lb = document.getElementById('lb');
+  const stage = document.getElementById('lb-stage');
+  const canvas = document.getElementById('lb-canvas');
+  const pct = document.getElementById('lb-pct');
+  let item = null, natW = 0, zoom = 1;
+
+  function naturalWidth(el) {
+    if (el.tagName === 'IMG') return el.naturalWidth || el.width;
+    const vb = el.viewBox && el.viewBox.baseVal;
+    return vb && vb.width ? vb.width : el.getBoundingClientRect().width;
+  }
+  function apply() {
+    if (!item) return;
+    item.style.width = Math.round(natW * zoom) + 'px';
+    pct.textContent = Math.round(zoom * 100) + '%';
+  }
+  function fit() {
+    const avail = stage.clientWidth - 48 - 48;
+    zoom = Math.min(1.5, Math.max(0.2, avail / natW));
+    apply();
+  }
+  function open(el, title) {
+    canvas.innerHTML = '';
+    item = el.cloneNode(true);
+    item.removeAttribute('style');
+    if (item.tagName === 'svg') { item.removeAttribute('width'); item.removeAttribute('height'); }
+    canvas.appendChild(item);
+    natW = naturalWidth(el);
+    document.getElementById('lb-title').textContent = title || '';
+    lb.hidden = false;
+    document.body.style.overflow = 'hidden';
+    zoom = Math.max(1, Math.min(1.5, (stage.clientWidth - 96) / natW));
+    // on wide diagrams start at 100% (readable), on small ones fill the screen
+    apply();
+    stage.scrollTo(0, 0);
+  }
+  function close() { lb.hidden = true; canvas.innerHTML = ''; item = null; document.body.style.overflow = ''; }
+
+  document.getElementById('lb-in').onclick = () => { zoom = Math.min(4, zoom * 1.25); apply(); };
+  document.getElementById('lb-out').onclick = () => { zoom = Math.max(0.2, zoom / 1.25); apply(); };
+  document.getElementById('lb-fit').onclick = fit;
+  document.getElementById('lb-close').onclick = close;
+  lb.addEventListener('click', e => { if (e.target === lb) close(); });
+  document.addEventListener('keydown', e => {
+    if (lb.hidden) return;
+    if (e.key === 'Escape') close();
+    if (e.key === '+' || e.key === '=') document.getElementById('lb-in').click();
+    if (e.key === '-') document.getElementById('lb-out').click();
+  });
+
+  // drag to pan
+  let drag = null;
+  stage.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'mouse') return;
+    drag = { x: e.clientX, y: e.clientY, l: stage.scrollLeft, t: stage.scrollTop };
+    stage.classList.add('dragging');
+  });
+  window.addEventListener('pointermove', e => {
+    if (!drag) return;
+    stage.scrollLeft = drag.l - (e.clientX - drag.x);
+    stage.scrollTop = drag.t - (e.clientY - drag.y);
+  });
+  window.addEventListener('pointerup', () => { drag = null; stage.classList.remove('dragging'); });
+
+  // wire up every diagram + ERD image
+  document.querySelectorAll('.plate').forEach(plate => {
+    const fig = plate.closest('.figure');
+    const h = fig && fig.querySelector('h3');
+    const title = h ? h.textContent.trim() : '';
+    const targets = plate.querySelectorAll('pre.mermaid svg, img.erd-img');
+    if (!targets.length) return;
+    targets.forEach(t => {
+      const link = t.closest('a');
+      const handler = e => { e.preventDefault(); open(t, title); };
+      (link || t).addEventListener('click', handler);
+    });
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'zoom-hint';
+    btn.innerHTML = '&#x1F50D; Enlarge';
+    btn.addEventListener('click', () => open(targets[0], title));
+    plate.prepend(btn);
+  });
+</script>
+
+</body>
+</html>
